@@ -37,7 +37,18 @@ for contigID, max_cds_len in len_cds.items():
     filt = (df['contigID'] == contigID)
     filt_cds_by_contig.append(df.loc[filt, 'diff'] >= max_cds_len)
 
-filt_too_long = pd.concat(filt_cds_by_contig) # filter for bad CDSs
+# This part was throwing some errors with Apptainer so I've rewriten it
+# In some cases nothing was filtered, so the index len was off
+
+# Initialize a boolean Series with same index as df, all False initially.
+filt_too_long = pd.Series(False, index=df.index)
+
+# Loop over each contig, update the Series for CDSs exceeding max length
+for contigID, max_cds_len in len_cds.items():
+    # Create a boolean Series for this contig
+    mask = (df['contigID'] == contigID) & (df['diff'] >= max_cds_len)
+    # Update the main Series: set True where condition matches
+    filt_too_long.loc[mask] = True
 
 
 cols = ['start', 'stop', 'strand', 'contigID']
