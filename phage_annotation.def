@@ -1,0 +1,37 @@
+Bootstrap: docker
+From: continuumio/miniconda3:latest
+
+%post
+    # Update conda and set up channels
+    conda config --add channels defaults
+    conda config --add channels bioconda
+    conda config --add channels conda-forge
+
+    # Install dependencies using mamba for speed
+    conda install -y mamba
+    mamba install -y \
+        python=3.11 \
+        biopython=1.79 \
+        pandas \
+        numpy \
+        seaborn \
+        matplotlib \
+        hhsuite \
+        mmseqs2=13.45111 \
+        clustalo=1.2.4 \
+        bedtools=2.30.0 \
+        glimmer=3.02 \
+        prodigal-gv=2.11.0 \
+        bedtools=2.30.0 \
+        pathlib=1.0.1 \
+        snakemake
+
+    # Install pip packages
+    pip install phylotreelib csb
+
+%environment
+    export PATH="/opt/conda/bin:$PATH"
+
+%runscript
+    exec snakemake "$@"
+

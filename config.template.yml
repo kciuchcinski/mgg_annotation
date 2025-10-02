@@ -1,9 +1,12 @@
+# This is a template for the configuration file.
+# Copy this file to config.yml and edit the paths to your databases.
+
 # configuration file
 PHAGES_DIR: test/data
 OUTPUT_DIR: test/output
 INPUT_EXTENSION: fasta
 PHAGE_MIN_LENGTH: 2000 # bp
-GLIMMER_TRAIN: databases/training-file_refseq.icm
+GLIMMER_TRAIN: /path/to/your/databases/training-file_refseq.icm
 SEARCH_TOOL: hhsearch # hhblits (faster) | hhsearch (more sensitive)
 
 # proteins families
@@ -14,15 +17,13 @@ CLUSTERING:
   SENSITIVITY: 7.5
 
 # paths to HHsuite databases
-# TODO: Replace this with a path to single databases folder
 HHSUITE:
-  PHROGS: databases/phrogs_hhsuite_db/phrogs
-  PFAM: databases/pfamA_32/pfam
-  ECOD: databases/ECOD_F70/ECOD_F70_20200207
-  ALANDB: databases/AlanDavidson/profile-db/all_proteins
+  PHROGS: /path/to/your/databases/phrogs_hhsuite_db/phrogs
+  PFAM: /path/to/your/databases/pfamA_32/pfam
+  ECOD: /path/to/your/databases/ECOD_F70/ECOD_F70_20200207
+  ALANDB: /path/to/your/databases/AlanDavidson/profile-db/all_proteins
 
 # paths to metadata tables
-# TODO: Replace this with a path to single tables folder
 METADATA:
   PHROGS_TABLE: 'dependencies/tables/phrog_annot_v4.tsv'
   MGG_PHROGS_TABLE: 'dependencies/tables/v3_phrogs-table-rafal-3_12.csv'

@@ -10,6 +10,9 @@ date: 20.07.2023
 authors: Janusz Koszucki, Wanangwa Ndovie, Rafal Mostowy
 """
 
+# Run with Apptainer
+container: "phage_annotation.sif"
+
 # load modules
 from dependencies.scripts.utils import bcolors, checkpoint, get_n_iterations
 from pathlib import Path
@@ -30,6 +33,7 @@ print(f"{bcolors.WARNING}5. Removing conda environments in some rules (HHsuite) 
 print(f"{bcolors.WARNING}6. Remove redundant files (eg, 1_MSA_VIEW & 2_MSA_SEARCH) {bcolors.ENDC}", end='\n')
 print(f"{bcolors.WARNING}7. SetupTools for setting up HHsuite databases automatically {bcolors.ENDC}", end='\n')
 print(f"{bcolors.WARNING}8. ALANDB HHsuite database on DropBox is (?) corrupted (multiple HMM profiles are empty, due to inconsistent number of columns in alignments from Alan) {bcolors.ENDC}", end='\n')
+
 
 
 # select databases
@@ -125,7 +129,6 @@ rule target:
         
 
 
-
         #####################################
         ######### CHECK INPUT FILES #########
         #####################################
@@ -136,7 +139,6 @@ rule check_input:
     output:
         fasta=Path(ORF_PREDICTION_DIR, 'phages.fasta'),
         table=Path(ORF_PREDICTION_DIR, 'metadata.tsv')
-    conda: 'dependencies/envs/orf-prediction.yml'
     script: 'dependencies/scripts/preprocessing.py'
 
 
@@ -150,7 +152,6 @@ rule check_input:
 rule prodigal:
     input: Path(ORF_PREDICTION_DIR, 'phages.fasta'),
     output: Path(PRODIGAL_DIR, 'phages.prod')
-    conda: 'dependencies/envs/orf-prediction.yml'
     threads: workflow.cores * 1.0
     shell: 'prodigal-gv -i {input} -o {output} -f sco -p meta -c'
 
@@ -160,7 +161,6 @@ rule glimmer3:
         fasta=Path(ORF_PREDICTION_DIR, 'phages.fasta'),
         train=GLIMMER_TRAIN
     output: Path(GLIMMER_DIR, 'phages.predict'),
-    conda: 'dependencies/envs/orf-prediction.yml'
     threads: workflow.cores * 1.0
     shell:
         'glimmer3 -o50 -g110 -t30 {input.fasta} {input.train} {output}; '
@@ -172,14 +172,12 @@ rule glimmer3:
 rule concat_prodigal:
     input: Path(PRODIGAL_DIR, 'phages.prod')
     output: Path(PRODIGAL_DIR, 'prodigal.csv')
-    conda: 'dependencies/envs/orf-prediction.yml'
     script: 'dependencies/scripts/concat_prodigal.py'
 
 # concat glimmer
 rule concat_glimmer:
     input: Path(GLIMMER_DIR, 'phages.predict')
     output: Path(GLIMMER_DIR, 'unfiltered-glimmer.csv')
-    conda: 'dependencies/envs/orf-prediction.yml'
     script: 'dependencies/scripts/concat_glimmer.py'
 
 # filter glimmer obvious false positives
@@ -188,7 +186,6 @@ rule filter_glimmer:
     output:
         Path(GLIMMER_DIR, 'glimmer.csv'),
         Path(GLIMMER_DIR, 'removed.csv')
-    conda: 'dependencies/envs/orf-prediction.yml'
     script:'dependencies/scripts/filter_glimmer.py'
 
 
@@ -202,7 +199,6 @@ rule processing:
     output:
         Path(ORF_PROCESSING_DIR, 'ambigous.csv'),
         Path(ORF_PROCESSING_DIR, 'orfs.csv')
-    conda: 'dependencies/envs/orf-prediction.yml'
     script: 'dependencies/scripts/processing.py'
 
 # extract ORFs & translate to proteins
@@ -215,14 +211,12 @@ rule extract_translate_orfs:
         Path(ORF_PROCESSING_DIR, 'erronous_orfs_tables', '{phage}.csv'),
         Path(ORFS_DIR, '{phage}.fasta'),
         Path(PROTEINS_DIR, '{phage}.fasta')
-    conda: 'dependencies/envs/orf-prediction.yml'
     script:'dependencies/scripts/translation.py'
 
 # reorganize results in one table
 rule reorganize_table:
     input: expand(Path(ORF_PROCESSING_DIR, 'confident_orfs_tables', '{phage}.csv'), phage=phages)
     output: Path(ORF_PREDICTION_DIR, 'confident_orfs.csv')
-    conda: 'dependencies/envs/orf-prediction.yml'
     script:'dependencies/scripts/reorganize_table.py'
 
 
@@ -253,12 +247,11 @@ rule clustering:
         COVERAGE=COVERAGE,
         EVAL=EVAL,
         SENSITIVITY=SENSITIVITY
-    conda: 'dependencies/envs/mmseqs.yml'
     shell:
-        "mmseqs createdb {input} {output.protein_db}; "
-        "mmseqs cluster {output.protein_db} {output.cluster_db} {output.mmseqs_dir} --min-seq-id {params.IDENTITY} -s {params.SENSITIVITY} -c {params.COVERAGE} -e {params.EVAL}; "
-        "mmseqs createtsv {output.protein_db} {output.protein_db} {output.cluster_db} {output.clusters}; "
-        "mmseqs result2msa {output.protein_db} {output.protein_db} {output.cluster_db} {output.clust2msa} --msa-format-mode 3; "
+        "mmseqs createdb {input} {output.protein_db} > {output.mmseqs_dir}/createdb.log 2>&1; "
+        "mmseqs cluster {output.protein_db} {output.cluster_db} {output.mmseqs_dir} --min-seq-id {params.IDENTITY} -s {params.SENSITIVITY} -c {params.COVERAGE} -e {params.EVAL} > {output.mmseqs_dir}/cluster.log 2>&1; "
+        "mmseqs createtsv {output.protein_db} {output.protein_db} {output.cluster_db} {output.clusters} > {output.mmseqs_dir}/createtsv.log 2>&1; "
+        "mmseqs result2msa {output.protein_db} {output.protein_db} {output.cluster_db} {output.clust2msa} --msa-format-mode 3 > {output.mmseqs_dir}/result2msa.log 2>&1; "
         "cp {output.clust2msa} {output.msa}; " # copy results
         "touch {output.protein_db} {output.cluster_db} {output.clust2msa}; " # create snakemake dummy files exist
 
@@ -267,7 +260,6 @@ rule clustering:
 rule PCs2proteins:
     input: Path(CLUSTERING_DIR, 'raw_PCs.tsv')
     output: Path(ANNOTATION_DIR, 'PCs2proteins.tsv')
-    conda: 'dependencies/envs/base.yml'
     script: 'dependencies/scripts/PCs2proteins.py'
 
 
@@ -275,7 +267,6 @@ rule PCs2proteins:
 rule clean_msa:
     input: Path(CLUSTERING_DIR, 'raw_msa.a3m')
     output: Path(ANNOTATION_DIR, 'msa.a3m')
-    conda: 'dependencies/envs/base.yml'
     script: 'dependencies/scripts/clean_msa.py'
 
 
@@ -297,8 +288,7 @@ rule enrich_msa:
     input: Path(MSA_DIR, '2_MSA_SEARCH', '{PC}.a3m')
     output: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m')
     params: PHROGS=PHROGS
-    conda: 'dependencies/envs/hhsuite.yml'
-    shell: 'hhblits -i "{input}" -d "{params.PHROGS}" -oa3m "{output}" -n 2 -cov 0 -p 0.95'
+    shell: 'hhblits -i "{input}" -d "{params.PHROGS}" -oa3m "{output}" -n 2 -cov 0 -p 0.95 > {output}.log 2>&1'
 
 
                 #######################
@@ -307,49 +297,46 @@ rule enrich_msa:
 
 # search PHROGs (one iteration)
 rule PHROGs:
-    input: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m'),
+    input: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m')
     output: Path(HHSUITE_DIR, 'PHROGS', '{PC}.hhr')
     params: 
         SEARCH_TOOL=SEARCH_TOOL,
         PHROGS=PHROGS,
         PHROGs_N_ITERATIONS=PHROGs_N_ITERATIONS
-    conda: 'dependencies/envs/hhsuite.yml'
-    shell: '{params.SEARCH_TOOL} -i "{input}" -d "{params.PHROGS}" -o "{output}" -cpu 2 -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 {params.PHROGs_N_ITERATIONS}'
+    shell: '{params.SEARCH_TOOL} -i "{input}" -d "{params.PHROGS}" -o "{output}" -cpu 2 -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 {params.PHROGs_N_ITERATIONS} > {output}.log 2>&1'
 
 
 # search ALANDB (one iteration)
 rule ALANDB:
-    input: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m'),
+    input: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m')
     output: Path(HHSUITE_DIR, 'ALANDB', '{PC}.hhr')
     params: 
         SEARCH_TOOL=SEARCH_TOOL,
         ALANDB=ALANDB,
         ALANDB_N_ITERATIONS=ALANDB_N_ITERATIONS
-    conda: 'dependencies/envs/hhsuite.yml'
-    shell: '{params.SEARCH_TOOL} -i "{input}" -d "{params.ALANDB}" -o "{output}" -cpu 2 -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 {params.ALANDB_N_ITERATIONS}'
+    shell: '{params.SEARCH_TOOL} -i "{input}" -d "{params.ALANDB}" -o "{output}" -cpu 2 -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 {params.ALANDB_N_ITERATIONS} > {output}.log 2>&1'
 
 
 # search PFAM (two interations)
 rule PFAM:
-    input: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m'),
+    input: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m')
     output: Path(HHSUITE_DIR, 'PFAM', '{PC}.hhr')
     params: 
         SEARCH_TOOL=SEARCH_TOOL,
         PFAM=PFAM,
         PFAM_N_ITERATIONS=PFAM_N_ITERATIONS
-    conda: 'dependencies/envs/hhsuite.yml'
-    shell: '{params.SEARCH_TOOL} -i "{input}" -d "{params.PFAM}" -o "{output}" -cpu 2 -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 {params.PFAM_N_ITERATIONS}'
+    shell: '{params.SEARCH_TOOL} -i "{input}" -d "{params.PFAM}" -o "{output}" -cpu 2 -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 {params.PFAM_N_ITERATIONS} > {output}.log 2>&1'
+
 
 # search ECOD (two interations)
 rule ECOD:
-    input: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m'),
+    input: Path(MSA_DIR, '3_MSA_PHROGS', '{PC}.a3m')
     output: Path(HHSUITE_DIR, 'ECOD', '{PC}.hhr')
     params: 
         SEARCH_TOOL=SEARCH_TOOL,
         ECOD=ECOD,
         ECOD_N_ITERATIONS=ECOD_N_ITERATIONS
-    conda: 'dependencies/envs/hhsuite.yml'
-    shell: '{params.SEARCH_TOOL} -i "{input}" -d "{params.ECOD}" -o "{output}" -cpu 2 -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 {params.ECOD_N_ITERATIONS}'
+    shell: '{params.SEARCH_TOOL} -i "{input}" -d "{params.ECOD}" -o "{output}" -cpu 2 -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 {params.ECOD_N_ITERATIONS} > {output}.log 2>&1'
 
 
 # annotation
@@ -370,7 +357,6 @@ rule annotation:
         alan_dir=Path(HHSUITE_DIR, 'ALANDB'),
         pfam_dir=Path(HHSUITE_DIR, 'PFAM'),
         ecod_dir=Path(HHSUITE_DIR, 'ECOD'),
-    conda: 'dependencies/envs/hhsuite.yml'
     script: 'dependencies/scripts/annotation.py'
 
 
@@ -380,7 +366,4 @@ rule genbank:
         annotation=Path(OUTPUT_DIR, 'annotation.tsv'),
         metadata=Path(ORF_PREDICTION_DIR, 'metadata.tsv')
     output: directory(Path(GENBANK_DIR))
-    conda: 'dependencies/envs/base.yml'
     script: 'dependencies/scripts/genbank.py'
-
-

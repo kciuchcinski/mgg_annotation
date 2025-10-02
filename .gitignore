@@ -2,12 +2,14 @@ test/output
 .snakemake
 nohup.out
 dependencies/scripts/__pycache__
-test/data/GS_G017_40K_KL30.fasta
-test/data/GS_G018_40K_KL61.fasta
-test/data/GS_G028_39K_KL25.fasta
+test/
+databases/
 cyanophages/
 sftp-config.json
 test_prodigalgv.sh
 test_prodigalgv.yml
 dependencies/envs/.DS_Store
 dependencies/scripts/annotation-jk.py
+config.yml
+*.sif
+.singularity.d/
