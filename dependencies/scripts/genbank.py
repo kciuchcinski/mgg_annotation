@@ -77,39 +77,40 @@ for phageID, group in annotation_df.groupby('contigID'):
         f.qualifiers = qualifiers
         features.append(f)
 
-    start, stop, strand = row['start'], row['stop'], row['strand']
-    pc, proteinID, protein = row['PC'], row['proteinID'], row['protein']
+# This created the duplicated CDS at the end of each genbank file
+#     start, stop, strand = row['start'], row['stop'], row['strand']
+#     pc, proteinID, protein = row['PC'], row['proteinID'], row['protein']
 
-    PHROG1_function, PHROG2_function, PHROG1_params, PHROG2_params = row['PHROGS1_function'], row['PHROGS2_function'], row['PHROGS1_params'], row['PHROGS2_params']
-    ALAN1_function, ALAN2_function, ALAN1_params, ALAN2_params = row['ALAN1_function'], row['ALAN2_function'], row['ALAN1_params'], row['ALAN2_params']
-    PFAM_function, PFAM_params = row['PFAM_function'], row['PFAM_params']
-    ECOD_function, ECOD_params = row['ECOD_function'], row['ECOD_params']
+#     PHROG1_function, PHROG2_function, PHROG1_params, PHROG2_params = row['PHROGS1_function'], row['PHROGS2_function'], row['PHROGS1_params'], row['PHROGS2_params']
+#     ALAN1_function, ALAN2_function, ALAN1_params, ALAN2_params = row['ALAN1_function'], row['ALAN2_function'], row['ALAN1_params'], row['ALAN2_params']
+#     PFAM_function, PFAM_params = row['PFAM_function'], row['PFAM_params']
+#     ECOD_function, ECOD_params = row['ECOD_function'], row['ECOD_params']
 
-    # correct for strand
-    if strand == '-': start, stop = stop, start
+#     # correct for strand
+#     if strand == '-': start, stop = stop, start
 
-    f = SeqFeature(FeatureLocation(start-1, stop, strand=int(f'{strand}1')), type='CDS')
-    qualifiers = {
-            'PHROG1': [PHROG1_function],
-            'PHROG2': [PHROG2_function],
-            'ALAN1': [ALAN1_function],
-            'ALAN2': [ALAN2_function],
-            'PFAM': [PFAM_function],
-            'ECOD': [ECOD_function],
-            'PHROG1_params': [PHROG1_params],
-            'PHROG2_params': [PHROG2_params],
-            'ALAN1_params': [ALAN1_params],
-            'ALAN2_params': [ALAN2_params],
-            'PFAM_params': [PFAM_params],
-            'ECOD_params': [ECOD_params],
-            'proteinID': [proteinID],
-            'PC': [pc],
-            'seq': [protein],
-            'translation': [protein],
-            }
+#     f = SeqFeature(FeatureLocation(start-1, stop, strand=int(f'{strand}1')), type='CDS')
+#     qualifiers = {
+#             'PHROG1': [PHROG1_function],
+#             'PHROG2': [PHROG2_function],
+#             'ALAN1': [ALAN1_function],
+#             'ALAN2': [ALAN2_function],
+#             'PFAM': [PFAM_function],
+#             'ECOD': [ECOD_function],
+#             'PHROG1_params': [PHROG1_params],
+#             'PHROG2_params': [PHROG2_params],
+#             'ALAN1_params': [ALAN1_params],
+#             'ALAN2_params': [ALAN2_params],
+#             'PFAM_params': [PFAM_params],
+#             'ECOD_params': [ECOD_params],
+#             'proteinID': [proteinID],
+#             'PC': [pc],
+#             'seq': [protein],
+#             'translation': [protein],
+#             }
 
-    f.qualifiers = qualifiers
-    features.append(f)
+#     f.qualifiers = qualifiers
+#     features.append(f)
 
     ### create record
     record = SeqRecord(Seq(seq), id=phageID)
