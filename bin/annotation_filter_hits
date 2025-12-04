@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""
+Filter raw HHsuite hits (search.tsv) into a per-hit report table (report.tsv)
+using per-DB thresholds for prob, qcov, and tcov.
+"""
+
+import argparse
+from pathlib import Path
+
+import pandas as pd
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Filter raw HHsuite hits (search.tsv) to produce report.tsv"
+    )
+    parser.add_argument("--search", required=True, help="Input search.tsv (raw hits)")
+    parser.add_argument("--phrogs-min-prob", type=float, required=True)
+    parser.add_argument("--phrogs-min-qcov", type=float, required=True)
+    parser.add_argument("--phrogs-min-tcov", type=float, required=True)
+    parser.add_argument("--domain-min-prob", type=float, required=True)
+    parser.add_argument("--domain-min-qcov", type=float, required=True)
+    parser.add_argument("--domain-min-tcov", type=float, required=True)
+    parser.add_argument("--out-report", required=True, help="Output report.tsv path")
+
+    args = parser.parse_args()
+
+    print("Loading search.tsv... ", end="")
+    df = pd.read_csv(args.search, sep="\t")
+    print("Done!")
+
+    if df.empty:
+        print("search.tsv is empty; writing empty report.tsv.")
+        Path(args.out_report).parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(args.out_report, sep="\t", index=False)
+        return
+
+    # Ensure required columns exist
+    required_cols = {"db", "prob", "qcov", "tcov"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns in search.tsv: {missing}")
+
+    # Define masks for PHROGS vs domain databases
+    phrogs_mask = df["db"] == "PHROGS"
+    domain_mask = df["db"].isin(["ECOD", "ALANDB", "PFAM"])
+
+    # Apply PHROGS thresholds
+    phrogs_filtered = df.loc[
+        phrogs_mask
+        & (df["prob"] >= args.phrogs_min_prob)
+        & (df["qcov"] >= args.phrogs_min_qcov)
+        & (df["tcov"] >= args.phrogs_min_tcov)
+    ]
+
+    # Apply domain thresholds
+    domain_filtered = df.loc[
+        domain_mask
+        & (df["prob"] >= args.domain_min_prob)
+        & (df["qcov"] >= args.domain_min_qcov)
+        & (df["tcov"] >= args.domain_min_tcov)
+    ]
+
+    # Keep any other DBs untouched (if present)
+    other_filtered = df.loc[~phrogs_mask & ~domain_mask]
+
+    report_df = pd.concat(
+        [phrogs_filtered, domain_filtered, other_filtered],
+        axis=0,
+        ignore_index=True,
+    )
+
+    print(f"Writing filtered hits to {args.out_report} ... ", end="")
+    Path(args.out_report).parent.mkdir(parents=True, exist_ok=True)
+    report_df.to_csv(args.out_report, sep="\t", index=False)
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main()

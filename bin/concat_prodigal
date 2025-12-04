@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+import pandas as pd
+import re
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Reads all Prodigal predicted ORFs and saves them in one table (faithful to original logic)"
+    )
+    ap.add_argument("--input", required=True, help="Prodigal SCO file, e.g., phages.prod")
+    ap.add_argument("--output", required=True, help="Output CSV filename")
+    return ap.parse_args()
+
+
+def load_prodigal_results(prod):
+    # read file (same semantics as original; r+ not needed)
+    with open(prod, "r") as f:
+        file = f.readlines()
+
+    comments, dfs = [], []
+    rows = []
+
+    for i, line in enumerate(file):
+        line = line.strip()
+
+        # get comments and tables
+        if line and line[0] == "#":
+            comments.append(line)
+
+            # save tables (same odd-count/threshold logic)
+            if len(comments) > 2 and len(comments) % 2 != 0:
+                df = pd.DataFrame({"loc": rows})
+                dfs.append(df)
+            rows = []
+
+        # save last table
+        elif i + 1 == len(file):
+            rows.append(line)  # add last row
+            df = pd.DataFrame({"loc": rows})
+            dfs.append(df)
+
+        # table rows
+        else:
+            rows.append(line)
+
+    # record IDs (same regex and derivation)
+    headers = [re.search(r"\".*\"", header).group() for header in comments[::2]]
+    phageIDs = [header.strip("\"").split()[0] for header in headers]
+
+    # CHECKPOINTS (same behavior and wording)
+    if len(phageIDs) != len(dfs):
+        print("Error in concat_prodigal.py!\nNumber of phage IDs dont match number of tables! Aboring!")
+        raise SystemExit(1)
+
+    for df in dfs:
+        if not df.shape:
+            print("Error in concat_prodigal.py!\nSome phage had no genes predicted! \nRemove that phage! Aborting!")
+            raise SystemExit(1)
+
+    # add contig name to each table
+    for phageID, df in zip(phageIDs, dfs):
+        df["contigID"] = phageID
+
+    df = pd.concat(dfs)
+    return df
+
+
+def orient_localization(row):
+    # same: make start always lower than stop
+    if int(row["start"]) <= int(row["stop"]):
+        new_start, new_stop = row["start"], row["stop"]
+    else:
+        new_start, new_stop = row["stop"], row["start"]
+    return pd.Series([new_start, new_stop])
+
+
+def biological_localization(row):
+    # same logic, including the original boolean-casting style
+    if row["strand"] == "+":
+        if int(row["start"] <= row["stop"]):
+            new_start, new_stop = row["start"], row["stop"]
+        else:
+            new_start, new_stop = row["stop"], row["start"]
+    elif row["strand"] == "-":
+        if int(row["start"] >= row["stop"]):
+            new_start, new_stop = row["start"], row["stop"]
+        else:
+            new_start, new_stop = row["stop"], row["start"]
+    else:
+        row["strand"], row["start"], row["stop"] = "WARNING! Unrecognized character.", 0, 0
+        new_start, new_stop = 0, 0
+
+    return pd.Series([new_start, new_stop])
+
+
+def main():
+    args = parse_args()
+    prodigal_results = args.input
+    prodigal_output = args.output
+
+    # load table (same)
+    df = load_prodigal_results(prodigal_results)
+    df.columns = ["loc", "contigID"]
+
+    # curate table (same operations and order)
+    df[["id", "start", "stop", "strand"]] = df["loc"].str.split("_", expand=True)
+    df["start"] = pd.to_numeric(df["start"], downcast="integer")
+    df["stop"] = pd.to_numeric(df["stop"], downcast="integer")
+    df[["new_start", "new_stop"]] = df.apply(orient_localization, axis=1)
+
+    df.drop(["start", "stop"], axis=1, inplace=True)
+    df.rename({"new_start": "start", "new_stop": "stop"}, axis=1, inplace=True)
+    df.sort_values(["contigID", "start"], inplace=True)
+
+    df[["new_start", "new_stop"]] = df.apply(biological_localization, axis=1)
+    df.drop(["start", "stop"], axis=1, inplace=True)
+    df.rename({"new_start": "start", "new_stop": "stop"}, axis=1, inplace=True)
+
+    cols = ["start", "stop", "strand", "contigID"]
+    Path(prodigal_output).parent.mkdir(parents=True, exist_ok=True)
+    df[cols].to_csv(prodigal_output, sep=",", index=False)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

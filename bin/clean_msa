@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Clean MSA of multiple protein clusters: remove lines containing '#', empty lines, and pure newlines"
+    )
+    ap.add_argument("--input", required=True, help="Input MSA file (e.g., from mmseqs result2msa)")
+    ap.add_argument("--output", required=True, help="Output cleaned MSA file")
+    return ap.parse_args()
+
+
+def main():
+    args = parse_args()
+    raw_msa = Path(args.input)
+    clean_msa = Path(args.output)
+    clean_msa.parent.mkdir(parents=True, exist_ok=True)
+
+    # clean MSA records (exact original logic)
+    clean_msa_lines = []
+    with raw_msa.open("r") as f:
+        for line in f.readlines():
+            if ("#" not in line) and line and (line != "\n"):
+                clean_msa_lines.append(line)
+
+    clean_msa_file = "".join(clean_msa_lines)
+
+    # save
+    with clean_msa.open("w") as f:
+        f.write(clean_msa_file)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

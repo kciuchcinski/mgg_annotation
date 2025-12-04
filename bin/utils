@@ -112,9 +112,3 @@ def get_n_iterations(SEARCH_TOOL):
     
 
     return PHROGs_N_ITERATIONS, ALANDB_N_ITERATIONS, PFAM_N_ITERATIONS, ECOD_N_ITERATIONS
-
-
-
-
-
-

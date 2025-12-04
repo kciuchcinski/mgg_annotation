@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+import pandas as pd
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Load phage sequence(s) and ORF table; extract ORFs and translate proteins per contig, matching original logic."
+    )
+    ap.add_argument("--fasta", required=True, help="FASTA with one or more contigs; record.id must match contigID or its first token")
+    ap.add_argument("--orfs", required=True, help="CSV with columns: start, stop, strand, contigID")
+    ap.add_argument("--outdir", required=True, help="Output directory; per-contig files will mirror original naming")
+    return ap.parse_args()
+
+
+def extract_orf_and_protein(row, seq):
+    """
+    Match original:
+    - Plus strand: seq[start-1:stop]
+    - Minus strand: seq[stop-1:start] then reverse_complement()
+    - Scan ORF body for internal stops (TAA,TAG,TGA); if found, translate body only and warn
+    - Otherwise translate body; codon_stop is last 3 nt (tail) from original ORF slice
+    """
+    start, stop, strand = int(row["start"]), int(row["stop"]), row["strand"]
+
+    if strand == "+":
+        nuc = seq[start - 1 : stop]
+    elif strand == "-":
+        # Original used stop-1:start then reverse_complement()
+        nuc = seq[stop - 1 : start]
+        nuc = nuc.reverse_complement()
+    else:
+        print("Wrong value of strand! Aborting! Error in translation.py")
+
+    # Extract body (all but last 3 nt) and tail (last 3 nt) like original
+    s = str(nuc)
+    if len(s) >= 3:
+        body_nt_list = list(s[:-3])
+        tail = s[-3:]
+    else:
+        body_nt_list = list(s)
+        tail = s
+
+    # Internal stop scan in ORF body only, step 3
+    codons_stop = ["TAA", "TAG", "TGA"]
+    for i in range(0, len(body_nt_list), 3):
+        codon = "".join(body_nt_list[i : i + 3])
+        if codon in codons_stop:
+            orf_nt = "".join(body_nt_list)
+            prot = str(Seq(orf_nt).translate())  # default Standard
+            return pd.Series([orf_nt, prot, tail, "WARNING! Codon stop within protein seq!"])
+
+    # No internal stop; translate body
+    orf_nt = "".join(body_nt_list)
+    prot = str(Seq(orf_nt).translate())  # default Standard
+    return pd.Series([orf_nt, prot, tail, "correct"])
+
+
+def emit_empty_artifacts(contig_id: str, outdir: Path):
+    confident_csv = outdir / "confident_orfs_tables" / f"{contig_id}.csv"
+    erroneous_csv = outdir / "erronous_orfs_tables" / f"{contig_id}.csv"
+    orf_fa = outdir / "orfs" / f"{contig_id}.fasta"
+    prot_fa = outdir / "proteins" / f"{contig_id}.fasta"
+    for p in (confident_csv.parent, erroneous_csv.parent, orf_fa.parent, prot_fa.parent):
+        p.mkdir(parents=True, exist_ok=True)
+    # Original behavior: touch empty error table; confident table also touched if no rows
+    erroneous_csv.touch()
+    confident_csv.touch()
+    orf_fa.write_text("")
+    prot_fa.write_text("")
+
+
+def process_contig(contig_id: str, contig_seq: Seq, complete_df: pd.DataFrame, outdir: Path):
+    # Prepare directories
+    confident_dir = outdir / "confident_orfs_tables"
+    erroneous_dir = outdir / "erronous_orfs_tables"
+    orf_fa_dir = outdir / "orfs"
+    prot_fa_dir = outdir / "proteins"
+    for d in (confident_dir, erroneous_dir, orf_fa_dir, prot_fa_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Subset rows for contig
+    phage_df = complete_df.loc[complete_df["contigID"] == contig_id].copy()
+
+    # Extract ORFs and translate
+    if phage_df.empty:
+        emit_empty_artifacts(contig_id, outdir)
+        return
+
+    # Match original .apply call shape (args=(seq,) not args=([seq]))
+    orf_prot_df = phage_df.apply(extract_orf_and_protein, args=(contig_seq,), axis=1)
+    orf_prot_df.columns = ["orf", "protein", "codon_stop", "error"]
+
+    # Merge
+    phage_df = pd.concat([phage_df, orf_prot_df], axis=1)
+
+    # Save erroneous
+    filt_nice = phage_df["error"] == "correct"
+    erronous_df = phage_df.loc[~filt_nice].copy()
+    if len(erronous_df):
+        erronous_df.to_csv(erroneous_dir / f"{contig_id}.csv", index=False)
+    else:
+        (erroneous_dir / f"{contig_id}.csv").touch()
+
+    # Keep correct only
+    phage_df = phage_df.loc[filt_nice].copy()
+    phage_df.drop(columns=["error"], inplace=True)
+
+    # Assign IDs 1..N and proteinID like original
+    phage_df.reset_index(drop=True, inplace=True)
+    phage_df.index.name = "ID"
+    phage_df.index = phage_df.index + 1
+    phage_df = phage_df.reset_index()
+    phage_df["proteinID"] = [f"PROTEIN_{i}" for i in phage_df["ID"].to_list()]
+
+    # Save confident table
+    phage_df.to_csv(confident_dir / f"{contig_id}.csv", index=False)
+
+    # ORF FASTA
+    orf_records = []
+    for contig, protID, orf_seq in zip(phage_df["contigID"], phage_df["ID"], phage_df["orf"]):
+        orf_records.append(
+            SeqRecord(seq=Seq(str(orf_seq)), id=f"{contig}_ORF_{protID}", name="", description="")
+        )
+    SeqIO.write(orf_records, orf_fa_dir / f"{contig_id}.fasta", "fasta")
+
+    # Protein FASTA
+    prot_records = []
+    for contig, protID, prot_seq in zip(phage_df["contigID"], phage_df["ID"], phage_df["protein"]):
+        prot_records.append(
+            SeqRecord(seq=Seq(str(prot_seq)), id=f"{contig}_PROTEIN_{protID}", name="", description="")
+        )
+    SeqIO.write(prot_records, prot_fa_dir / f"{contig_id}.fasta", "fasta")
+
+
+def main():
+    args = parse_args()
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # Load sequences
+    records = list(SeqIO.parse(args.fasta, "fasta"))
+    # Original single-record checkpoint is relaxed here to allow multi-contig; per-contig processing follows
+    seq_by_id = {rec.id: rec.seq for rec in records}
+
+    # Load ORFs and validate required columns
+    complete_df = pd.read_csv(args.orfs)
+    required = {"start", "stop", "strand", "contigID"}
+    missing = required - set(complete_df.columns)
+    if missing:
+        raise ValueError(f"Missing ORF columns: {sorted(missing)}")
+
+    # Process each contig present in table
+    for contig_id in sorted(complete_df["contigID"].unique()):
+        seq = None
+        if contig_id in seq_by_id:
+            seq = seq_by_id[contig_id]
+        else:
+            # Fallback: match first token in FASTA header
+            for rid, rseq in seq_by_id.items():
+                if rid.split()[0] == contig_id:
+                    seq = rseq
+                    break
+
+        if seq is None:
+            emit_empty_artifacts(contig_id, outdir)
+            continue
+
+        process_contig(contig_id, seq, complete_df, outdir)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

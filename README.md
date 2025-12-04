@@ -48,3 +48,10 @@ You can now run the pipeline using the `snakemake` command.
 ```bash
 snakemake --cores all --snakefile ANNOTATION --configfile config.yml --sdm apptainer
 ```
+
+### TODO
+
+1. Fix AA/NT seqs in genbanks
+2. Add significance levels to genbanks
+3. Add the option to select how many significant functions are reported
+4. Choose how the best hit is selected for each DB

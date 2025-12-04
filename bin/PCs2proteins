@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+import pandas as pd
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Map protein clusters to protein IDs, renaming PCs by size and representative ID"
+    )
+    ap.add_argument("--input", required=True, help="raw_PCs.tsv from mmseqs createtsv (repr and proteinID)")
+    ap.add_argument("--output", required=True, help="Output PCs2proteins.tsv")
+    return ap.parse_args()
+
+
+def main():
+    args = parse_args()
+    inp = Path(args.input)
+    out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load two-column TSV without header: repr, proteinID
+    clusters_df = pd.read_csv(inp, sep="\t", header=None, names=["repr", "proteinID"])
+
+    # Handle empty input gracefully
+    if clusters_df.empty:
+        pd.DataFrame(columns=["PC", "proteinID", "repr"]).to_csv(out, sep="\t", index=False)
+        return 0
+
+    # Compute cluster sizes per representative
+    size_df = (
+        clusters_df.groupby("repr")
+        .size()
+        .sort_values(ascending=False)
+        .reset_index(name="size")
+    )
+
+    # Attach sizes to each row for stable ordering, then drop size
+    clusters_df = clusters_df.merge(size_df, on="repr", how="left")
+    clusters_df = clusters_df.sort_values(["size", "repr", "proteinID"], ascending=[False, True, True]).drop(
+        columns=["size"]
+    )
+
+    # Create PC names ordered by descending size and repr lexicographic
+    reprs_ordered = size_df["repr"].tolist()
+    width = len(str(len(reprs_ordered)))
+    mapper = {repr_id: f"PC{str(i+1).zfill(width)}" for i, repr_id in enumerate(reprs_ordered)}
+
+    # Map PC names and produce final table
+    clusters_df["PC"] = clusters_df["repr"].map(mapper)
+    # Sort PCs numerically by suffix to get PC1, PC2, ..., and stabilize by repr/proteinID
+    clusters_df["__pc_num"] = clusters_df["PC"].str.extract(r"(\d+)").astype(int)
+    clusters_df = clusters_df.sort_values(["__pc_num", "repr", "proteinID"], ascending=[True, True, True]).drop(
+        columns="__pc_num"
+    )
+
+    clusters_df[["PC", "proteinID", "repr"]].to_csv(out, sep="\t", index=False)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

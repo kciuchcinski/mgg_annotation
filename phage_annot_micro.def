@@ -1,0 +1,37 @@
+Bootstrap: docker
+From: mambaorg/micromamba:latest
+
+%post
+    apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*.
+    # Install all conda packages from specified channels
+    micromamba install -y -n base -c defaults -c bioconda -c conda-forge \
+        python=3.11 \
+        biopython=1.79 \
+        pandas \
+        numpy \
+        seaborn \
+        matplotlib \
+        hhsuite \
+        mmseqs2=13.45111 \
+        clustalo=1.2.4 \
+        bedtools=2.30.0 \
+        glimmer=3.02 \
+        prodigal-gv=2.11.0 \
+        snakemake \
+        ffindex \
+        pip && \
+    
+    # Use 'micromamba run' to ensure pip is executed from within the 'base' environment
+    micromamba run -n base pip install \
+        phylotreelib \
+        csb && \
+
+    # Clean up caches to reduce image size
+    micromamba clean --all --yes
+
+%environment
+    # The base environment is activated by default in micromamba images
+    export PATH="/opt/conda/bin:$PATH"
+
+%runscript
+    exec snakemake "$@"

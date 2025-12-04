@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+import argparse
+import sys
+from pathlib import Path
+import pandas as pd
+from Bio import SeqIO
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Preprocess phage FASTA inputs into a single FASTA and metadata table")
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--inputs", nargs="+", help="Input FASTA files (small sets)")
+    group.add_argument("--inputs-dir", type=Path, help="Directory containing input FASTA files")
+    p.add_argument("--min-len", type=int, default=2000, help="Minimum contig length to accept")
+    p.add_argument("--ext", default="fasta", help="Input extension (for metadata only)")
+    p.add_argument("--fasta", required=True, help="Output combined FASTA path")
+    p.add_argument("--table", required=True, help="Output metadata TSV path")
+    p.add_argument("--outdir", required=True, help="Output directory for per-input artifacts and logs")
+    return p.parse_args()
+
+def enumerate_inputs(args):
+    if args.inputs_dir:
+        # Discover files by extension in the provided directory (non-recursive; change to rglob if needed)
+        return sorted(str(p) for p in args.inputs_dir.glob(f"*.{args.ext}"))
+    else:
+        return [str(Path(x)) for x in args.inputs]
+
+def main():
+    args = parse_args()
+    inputs = enumerate_inputs(args)
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    kept_records, kept_rows, dropped_rows = [], [], []
+
+    for phage in inputs:
+        phage_path = Path(phage)
+        if not phage_path.is_file():
+            print(f"Warning: Input file not found, skipping: {phage}", file=sys.stderr)
+            continue
+
+        records = list(SeqIO.parse(phage, "fasta"))
+        fname = phage_path.stem
+        ncontigs = len(records)
+
+        if ncontigs != 1:
+            dropped_rows.append({"file_name": fname, "reason": f"n_contigs != 1 ({ncontigs})"})
+            continue
+
+        r = records[0]
+        contig_id = r.id.strip()
+        contig_name = getattr(r, "name", r.id).strip()
+        contig_desc = getattr(r, "description", r.id).strip()
+        contig_len = len(r.seq)
+
+        if contig_len < int(args.min_len):
+            dropped_rows.append({"file_name": fname, "reason": f"contig length {contig_len} < min_len {args.min_len}"})
+            continue
+
+        kept_records.append(r)
+        kept_rows.append({
+            "file_name": fname,
+            "contigID": contig_id,
+            "contig_name": contig_name,
+            "contig_description": contig_desc,
+            "contig_len [bp]": contig_len,
+            "n_contigs": ncontigs,
+            "seq": str(r.seq),
+        })
+
+    if not kept_records:
+        print("Error in preprocessing: no inputs passed QC filters (length/contigs).", file=sys.stderr)
+        Path(args.fasta).write_text("")
+        pd.DataFrame(columns=["file_name", "reason"]).to_csv(outdir / "dropped.tsv", sep="\t", index=False)
+        return 1
+
+    SeqIO.write(kept_records, args.fasta, "fasta")
+
+    df = pd.DataFrame(kept_rows)
+    df.index = df.index + 1
+    df.index.name = "n"
+    Path(args.table).parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(args.table, sep="\t")
+
+    if dropped_rows:
+        pd.DataFrame(dropped_rows).to_csv(outdir / "dropped.tsv", sep="\t", index=False)
+    pd.DataFrame({"file_name": [row["file_name"] for row in kept_rows]}).to_csv(outdir / "kept.tsv", sep="\t", index=False)
+
+    print(f"Analyzing {len(kept_records)} phage genomes...")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

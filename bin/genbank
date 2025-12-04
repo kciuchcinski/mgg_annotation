@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""
+Generate genbank files of prophages.
+"""
+
+import argparse
+import pandas as pd
+from pathlib import Path
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqFeature import SeqFeature, FeatureLocation
+from Bio.SeqRecord import SeqRecord
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Generate GenBank files of prophages')
+    parser.add_argument('--annotation', required=True, help='Annotation TSV')
+    parser.add_argument('--metadata', required=True, help='Metadata TSV with sequences')
+    parser.add_argument('--outdir', required=True, help='Output directory for GenBank files')
+    args = parser.parse_args()
+
+    annotation_path = args.annotation
+    metadata_path = args.metadata
+    genbank_dir = Path(args.outdir)
+    genbank_dir.mkdir(exist_ok=True, parents=True)
+
+    # Load inputs
+    annotation_df = pd.read_csv(annotation_path, sep='\t')
+    metadata_df = pd.read_csv(metadata_path, sep='\t')
+
+    # Handle case where annotation file is empty
+    if annotation_df.empty:
+        print("Annotation file is empty. No GenBank files will be generated.")
+        return
+
+    # Extract contigID from proteinID
+    if 'proteinID' in annotation_df.columns:
+        annotation_df['contigID'] = annotation_df['proteinID'].str.split(r'_PROTEIN_*', expand=True)[0]
+
+    # Group by contigID and write GenBank files
+    for phageID, group in annotation_df.groupby('contigID'):
+
+        features = []
+
+        # Get phage nucleotide sequence
+        seq_row = metadata_df[metadata_df['contigID'] == phageID]
+        if seq_row.empty:
+            print(f"Warning: No sequence found in metadata for contigID {phageID}")
+            continue
+        seq = seq_row['seq'].values[0]
+
+        genbank_path = genbank_dir / f"{phageID}.gb"
+
+        for _, row in group.iterrows():
+            start, stop, strand = row['start'], row['stop'], row['strand']
+            pc, proteinID, orf, protein = row['PC'], row['proteinID'], row['orf'], row['protein']
+
+            PHROG1_function, PHROG2_function = row['PHROGS1_function'], row['PHROGS2_function']
+            PHROG1_params, PHROG2_params = row['PHROGS1_params'], row['PHROGS2_params']
+            ALAN1_function, ALAN2_function = row['ALAN1_function'], row['ALAN2_function']
+            ALAN1_params, ALAN2_params = row['ALAN1_params'], row['ALAN2_params']
+            PFAM_function, PFAM_params = row['PFAM_function'], row['PFAM_params']
+            ECOD_function, ECOD_params = row['ECOD_function'], row['ECOD_params']
+
+            # Ensure valid genomic interval regardless of strand
+            left = min(int(start), int(stop))
+            right = max(int(start), int(stop))
+            strand_int = -1 if str(strand) == '-' else 1
+
+            feature = SeqFeature(
+                FeatureLocation(left - 1, right, strand=strand_int),
+                type='CDS'
+            )
+            
+            qualifiers = {
+                'PHROG1': [PHROG1_function],
+                'PHROG2': [PHROG2_function],
+                'ALAN1': [ALAN1_function],
+                'ALAN2': [ALAN2_function],
+                'PFAM': [PFAM_function],
+                'ECOD': [ECOD_function],
+                'PHROG1_params': [PHROG1_params],
+                'PHROG2_params': [PHROG2_params],
+                'ALAN1_params': [ALAN1_params],
+                'ALAN2_params': [ALAN2_params],
+                'PFAM_params': [PFAM_params],
+                'ECOD_params': [ECOD_params],
+                'proteinID': [proteinID],
+                'PC': [pc],
+                'seq': [orf],
+                'translation': [protein],
+            }
+            feature.qualifiers = qualifiers
+            features.append(feature)
+
+        record = SeqRecord(Seq(seq), id=phageID)
+        record.annotations['molecule_type'] = 'DNA'
+        record.features = features
+        record.name = ''
+        record.description = ''
+        record.organism = ''
+
+        SeqIO.write(record, genbank_path, 'genbank')
+
+
+if __name__ == '__main__':
+    main()

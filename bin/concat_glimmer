@@ -1,17 +1,24 @@
-"""
-Reads all of the glimmer predicted orfs and save them in one table
-"""
-
+#!/usr/bin/env python3
+import argparse
 from pathlib import Path
 import pandas as pd
 from io import StringIO
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Reads all of the Glimmer predicted ORFs and saves them in one table (legacy logic preserved)"
+    )
+    ap.add_argument("--input", required=True, help="Glimmer .predict (SCO) file")
+    ap.add_argument("--output", required=True, help="Output CSV path")
+    return ap.parse_args()
 
 
 def load_glimmer_results(glim):
     """ Load results from glimmer for multiple (>1) input records! """
 
     # read file
-    with open(glim, 'r+') as f:
+    with open(glim, 'r') as f:
         file = f.readlines()
 
     # load tables
@@ -20,43 +27,44 @@ def load_glimmer_results(glim):
         line = line.strip()
 
         # get comments and tables
-        if line[0] == '>':
+        if line and line[0] == '>':
             comments.append(line)
 
             # save tables
             if len(comments) > 1:
-                rows = StringIO('\n'.join(rows))
-                df = pd.read_csv(rows, header=None, delim_whitespace=True)
+                rows_buf = StringIO('\n'.join(rows))
+                df = pd.read_csv(rows_buf, header=None, delim_whitespace=True)
                 dfs.append(df)
             rows = []
 
         # save last table
         elif i + 1 == len(file):
-            rows.append(line) # add last row
-            rows = StringIO('\n'.join(rows))
-            df = pd.read_csv(rows, header=None, delim_whitespace=True)
+            rows.append(line)  # add last row
+            rows_buf = StringIO('\n'.join(rows))
+            df = pd.read_csv(rows_buf, header=None, delim_whitespace=True)
             dfs.append(df)
 
         # table rows
-        else: rows.append(line)
+        else:
+            rows.append(line)
 
     # record IDs
     phageIDs = [header.split()[0].strip('>') for header in comments]
 
-                    ###########################
-                    ####### CHECKPOINTS #######
-                    ###########################
+    ###########################
+    ####### CHECKPOINTS #######
+    ###########################
 
     # different number of phageIDs and tables!
     if len(phageIDs) != len(dfs):
         print('Error in concat_glimmner.py!\nNumber of phage IDs dont match number of tables! Aboring!')
-        exit()
+        raise SystemExit(1)
 
     # no genes predicted for a phage!
     for df in dfs:
         if not df.shape:
             print('Error in concat_glimmner.py!\nSome phage had no genes predicted! \nRemove that phage! Aborting!')
-            exit()
+            raise SystemExit(1)
 
     # add contig name to each table
     for phageID, df in zip(phageIDs, dfs):
@@ -84,8 +92,6 @@ def orient_localization(row):
 def biological_localization(row):
     """ Switch start and stop in the table accordinlgy to strand. Stop is always codon stop, start is always codon start. """
 
-    # make start and stop locations correspornd to start & stop codons
-
     # strand +; start is lower number; stop is higher number
     if row['strand'] == '+':
         # start is always lower number
@@ -104,27 +110,34 @@ def biological_localization(row):
     return pd.Series([new_start, new_stop])
 
 
-### concat glimmer results
-glimmer_results = snakemake.input[0]
-glimmer_output = snakemake.output[0]
+def main():
+    args = parse_args()
+    glim_in = args.input
+    glim_out = args.output
 
-# load table
-df = load_glimmer_results(glimmer_results)
-df.columns = ['id', 'start', 'stop', 'strand', 'score', 'contigID']
+    # load table
+    df = load_glimmer_results(glim_in)
+    # original code expects 6 columns after assignment below
+    df.columns = ['id', 'start', 'stop', 'strand', 'score', 'contigID']
 
-### curate table
-# sort ascendingly by start, regardless strand
-df[['new_start', 'new_stop', 'new_strand']] = df.apply(orient_localization, axis=1) # reorient start and stop
-df.drop(['start', 'stop', 'strand'], axis=1, inplace=True) # remove old columns
-df.rename({'new_start': 'start', 'new_stop': 'stop', 'new_strand': 'strand'}, axis=1, inplace=True)
-df.sort_values(['contigID', 'start'], inplace=True)
+    ### curate table
+    # sort ascendingly by start, regardless strand
+    df[['new_start', 'new_stop', 'new_strand']] = df.apply(orient_localization, axis=1)  # reorient start and stop
+    df.drop(['start', 'stop', 'strand'], axis=1, inplace=True)  # remove old columns
+    df.rename({'new_start': 'start', 'new_stop': 'stop', 'new_strand': 'strand'}, axis=1, inplace=True)
+    df.sort_values(['contigID', 'start'], inplace=True)
 
-# start & stop correspond to codon start & codon stop
-df[['new_start', 'new_stop']] = df.apply(biological_localization, axis=1) # reorient start and stop
-df.drop(['start', 'stop'], axis=1, inplace=True) # remove columns
-df.rename({'new_start': 'start', 'new_stop': 'stop'}, axis=1, inplace=True)
+    # start & stop correspond to codon start & codon stop
+    df[['new_start', 'new_stop']] = df.apply(biological_localization, axis=1)  # reorient start and stop
+    df.drop(['start', 'stop'], axis=1, inplace=True)  # remove columns
+    df.rename({'new_start': 'start', 'new_stop': 'stop'}, axis=1, inplace=True)
+
+    # save table
+    cols = ['start', 'stop', 'strand', 'contigID']
+    Path(glim_out).parent.mkdir(parents=True, exist_ok=True)
+    df[cols].to_csv(glim_out, sep=',', index=False)
+    return 0
 
 
-# save table
-cols = ['start', 'stop', 'strand', 'contigID']
-df[cols].to_csv(glimmer_output, sep=',', index=False)
+if __name__ == "__main__":
+    raise SystemExit(main())

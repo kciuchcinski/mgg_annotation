@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import itertools
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Merge Prodigal and Glimmer ORFs, filter Glimmer by overlap with Prodigal, and remove ambiguous long ORFs (match original logic)"
+    )
+    ap.add_argument("--metadata", required=True, help="metadata.tsv from preprocessing (tab-separated)")
+    ap.add_argument("--prodigal", required=True, help="prodigal.csv from concat_prodigal")
+    ap.add_argument("--glimmer", required=True, help="glimmer.csv from filter_glimmer")
+    ap.add_argument("--ambigous", required=True, help="Output CSV for removed (ambiguous) ORFs")
+    ap.add_argument("--confident", required=True, help="Output CSV for kept (confident) ORFs")
+    ap.add_argument("--glimmer_overlap", type=float, default=5.0, help="Max allowed overlap percentage vs Prodigal (default 5)")
+    ap.add_argument("--ambig_frac", type=float, default=0.65, help="Fraction of contig length to flag as ambiguous (default 0.65)")
+    return ap.parse_args()
+
+def calculate_overlap(glimmer_interval, prodigal_interval):
+    start1, end1 = glimmer_interval
+    start2, end2 = prodigal_interval
+    overlap = max(0, min(end1, end2) - max(start1, start2))
+    glimmer_len = max(1, end1 - start1)  # avoid zero division
+    return (overlap / glimmer_len) * 100.0
+
+def filter_glimmer_genes(prodigal_df, glimmer_df, max_pct=5.0):
+    # Copy prodigal and swap start/stop for negative strand for overlap calcs (original behavior)
+    def swap_values(start, stop, strand):
+        mask = strand == '-'
+        start = start.copy()
+        stop = stop.copy()
+        start[mask], stop[mask] = stop[mask], start[mask]
+        return start, stop
+
+    prodigal_df = prodigal_df.copy()
+    s, e = swap_values(
+        prodigal_df['start'].to_numpy(), prodigal_df['stop'].to_numpy(), prodigal_df['strand']
+    )
+    prodigal_df['start'] = s
+    prodigal_df['stop'] = e
+
+    # Sort Glimmer by contig and group like original
+    glimmer_df = glimmer_df.sort_values(by='contigID')
+    grouped_glimmer = itertools.groupby(glimmer_df.iterrows(), key=lambda x: x[1]['contigID'])
+
+    filtered_glimmer = []
+    for contig_id, group in grouped_glimmer:
+        group = list(group)
+        group_df = pd.DataFrame([row[1] for row in group])
+
+        prodigal_on_contig = prodigal_df[prodigal_df['contigID'] == contig_id]
+        if prodigal_on_contig.empty:
+            filtered_glimmer.extend(group_df.to_dict('records'))
+            continue
+
+        prodigal_intervals = np.column_stack((prodigal_on_contig['start'], prodigal_on_contig['stop']))
+
+        for _, glimmer_gene in group_df.iterrows():
+            glimmer_strand = glimmer_gene['strand']
+            # For overlap math only, normalize glimmer interval as in original
+            glimmer_start, glimmer_stop = (
+                (glimmer_gene['start'], glimmer_gene['stop']) if glimmer_strand == '+'
+                else (glimmer_gene['stop'], glimmer_gene['start'])
+            )
+            glimmer_interval = (glimmer_start, glimmer_stop)
+
+            overlaps = [
+                calculate_overlap(glimmer_interval, (pstart, pstop))
+                for pstart, pstop in prodigal_intervals
+            ]
+            if all(ov < max_pct for ov in overlaps):
+                filtered_glimmer.append(glimmer_gene)
+
+    return pd.DataFrame(filtered_glimmer)
+
+def main():
+    args = parse_args()
+
+    # Load inputs
+    meta = pd.read_csv(args.metadata, sep="\t")
+    prodigal_df = pd.read_csv(args.prodigal)
+    glimmer_df = pd.read_csv(args.glimmer)
+
+    # Required columns
+    for name, df, req in (
+        ("metadata", meta, {"contigID", "contig_len [bp]"}),
+        ("prodigal", prodigal_df, {"start", "stop", "strand", "contigID"}),
+        ("glimmer", glimmer_df, {"start", "stop", "strand", "contigID"}),
+    ):
+        missing = req - set(df.columns)
+        if missing:
+            raise ValueError(f"{name} missing columns: {sorted(missing)}")
+
+    # Tag sources (original)
+    prodigal_df = prodigal_df.assign(source='prodigal')
+    glimmer_df = glimmer_df.assign(source='glimmer')
+
+    # Filter Glimmer genes (original overlap semantics)
+    filtered_glimmer_df = filter_glimmer_genes(prodigal_df, glimmer_df, max_pct=float(args.glimmer_overlap))
+
+    # Merge prodigal with filtered glimmer (original)
+    df = pd.concat([prodigal_df, filtered_glimmer_df], ignore_index=True)
+
+    # Rebuild final_orfs keyed by contig then by stop (original grouping behavior)
+    final_orfs = {}
+    for cid, contig in df.groupby('contigID'):
+        for oid, orf in contig.groupby('stop'):
+            row = [orf['start'].iloc[0], oid, orf['strand'].iloc[0], cid, orf['source'].iloc[0]]
+            final_orfs[f"{cid}-{oid}"] = row
+
+    confident_orfs = pd.DataFrame.from_dict(
+        final_orfs, orient='index', columns=['start', 'stop', 'strand', 'contigID', 'source']
+    )
+
+    # Attach contig length and compute orf_len like original (strand-aware, no global normalization)
+    input_df = meta[['contigID', 'contig_len [bp]']].copy()
+    confident_orfs = confident_orfs.merge(input_df, on='contigID', how='left')
+
+    # Original get_orf_len: +strand length = stop - start + 1; -strand = start - stop + 1
+    orf_len = np.where(
+        confident_orfs['strand'] == '+',
+        confident_orfs['stop'] - confident_orfs['start'] + 1,
+        confident_orfs['start'] - confident_orfs['stop'] + 1
+    )
+    confident_orfs['half_contig_len [bp]'] = confident_orfs['contig_len [bp]'] * float(args.ambig_frac)
+    confident_orfs['orf_len'] = orf_len
+    confident_orfs['ambigous'] = confident_orfs['orf_len'] >= confident_orfs['half_contig_len [bp]']
+
+    # Save tables with the exact output columns as original
+    cols_out = ['start', 'stop', 'strand', 'contigID', 'source', 'contig_len [bp]', 'half_contig_len [bp]', 'orf_len', 'ambigous']
+    confident_orfs.loc[confident_orfs['ambigous'], cols_out].to_csv(args.ambigous, index=False)
+    confident_orfs.loc[~confident_orfs['ambigous'], cols_out].to_csv(args.confident, index=False)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

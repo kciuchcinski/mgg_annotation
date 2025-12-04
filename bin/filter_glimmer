@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+import pandas as pd
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Filter Glimmer ambiguous ORFs (covering almost entire contig span) — original logic preserved with aligned mask"
+    )
+    ap.add_argument("--input", required=True, help="Input CSV from concat_glimmer")
+    ap.add_argument("--output", required=True, help="Output filtered CSV path (kept)")
+    ap.add_argument("--removed", required=True, help="Output CSV path for removed ORFs")
+    return ap.parse_args()
+
+
+def main():
+    args = parse_args()
+    glimmer = Path(args.input)
+    filtered = Path(args.output)
+    removed = Path(args.removed)
+
+    cols = ["start", "stop", "strand", "contigID"]
+
+    # Load table (original used pd.read_csv without options)
+    if not glimmer.exists() or glimmer.stat().st_size == 0:
+        filtered.parent.mkdir(parents=True, exist_ok=True)
+        removed.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(columns=cols).to_csv(filtered, sep=",", index=False)
+        pd.DataFrame(columns=cols).to_csv(removed, sep=",", index=False)
+        return 0
+
+    df = pd.read_csv(glimmer)
+
+    # Reformatting columns (original: downcast='integer')
+    df["start"] = pd.to_numeric(df["start"], downcast="integer")
+    df["stop"] = pd.to_numeric(df["stop"], downcast="integer")
+    df["diff"] = (df["stop"] - df["start"]).abs()
+
+    # calculating the total cds length for every contig (original loop and 0.9 factor)
+    len_cds = {}
+    for contigID, contig_df in df.groupby(["contigID"]):
+        total_len = contig_df["stop"].max() - contig_df["start"].min()
+        max_cds_len = total_len * 0.9
+        len_cds[contigID] = int(max_cds_len)
+
+    # Build aligned boolean mask on df.index (minimal change to fix unalignable mask)
+    filt_too_long = pd.Series(False, index=df.index)
+    for contigID, max_cds_len in len_cds.items():
+        mask_contig = (df["contigID"] == contigID) & (df["diff"] >= max_cds_len)
+        # Set True only for rows in this contig exceeding threshold
+        filt_too_long.loc[mask_contig] = True
+
+    # Write outputs with original columns and comma separator
+    filtered.parent.mkdir(parents=True, exist_ok=True)
+    removed.parent.mkdir(parents=True, exist_ok=True)
+    df.loc[~filt_too_long, cols].to_csv(filtered, sep=",", index=False)
+    df.loc[filt_too_long, cols].to_csv(removed, sep=",", index=False)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
