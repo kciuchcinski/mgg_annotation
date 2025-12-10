@@ -178,7 +178,7 @@ process REORGANIZE_TABLE {
   shell:
   """
   set -euo pipefail
-  reorganize_table --inputs ${confident_orfs_tables.join(' ')} --output confident_orfs.csv
+  reorganize_table --inputs *.csv --output confident_orfs.csv
   """
 }
 
@@ -191,7 +191,7 @@ process CONCAT_PROTEINS {
   shell:
   """
   set -euo pipefail
-  concat_proteins ${proteins_fasta.join(' ')} --output proteins.fasta
+  concat_proteins *.fasta --output proteins.fasta
   """
 }
 
@@ -253,14 +253,17 @@ process SPLIT_MSA {
 // 8) Build FFindex
 process BUILD_FFINDEX {
     tag "chunk_${task.hash.substring(0,8)}"
+    
     input:
-    tuple val(pc_ids), path(a3m_files)
+    // This tells Nextflow to put all files from the list into 'chunk/a3m/' automatically
+    tuple val(pc_ids), path(a3m_files, stageAs: 'chunk/a3m/*') 
+
     output:
     tuple val(pc_ids), path("chunk/qdb.ffindex"), path("chunk/qdb.ffdata")
-    shell:
+
+    script:
     """
-    mkdir -p chunk/a3m
-    for f in ${a3m_files.join(' ')}; do ln -s \$PWD/\$f chunk/a3m/; done
+    # Files are already in chunk/a3m/ because of stageAs
     cd chunk/a3m
     ffindex_build -s ../qdb.ffdata ../qdb.ffindex .
     """
@@ -276,6 +279,9 @@ process ENRICH_MSA_PHROGS {
     tuple val(pc_ids), path("enr/enr_a3m.ffindex"), path("enr/enr_a3m.ffdata")
     shell:
     """
+    export OMP_STACKSIZE=32768
+    ulimit -s unlimited || true
+
     mkdir -p enr
     ln -s \$(realpath ${qidx}) enr/qdb.ffindex
     ln -s \$(realpath ${qdat}) enr/qdb.ffdata
@@ -301,6 +307,9 @@ process HHSUITE_SEARCH_BATCH {
     tuple val(dbname), val(pc_ids), path("hhs/${dbname}.hhr.ffindex"), path("hhs/${dbname}.hhr.ffdata")
     shell:
     """
+    export OMP_STACKSIZE=32768
+    ulimit -s unlimited || true
+
     mkdir -p hhs
     ln -s \$(realpath ${ffidx}) hhs/enr_a3m.ffindex
     ln -s \$(realpath ${ffdat}) hhs/enr_a3m.ffdata
