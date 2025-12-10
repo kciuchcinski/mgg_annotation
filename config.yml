@@ -12,7 +12,7 @@ INPUT_EXTENSION: fasta
 OUTPUT_DIR: output_test
 
 # Database root directory (use absolute path)
-DB_ROOT: /home/karol/krk_pipeline/mgg_annotation/databases
+DB_ROOT: /net/storage/pr3/plgrid/plggmgmcb/team/kciuchcinski/MGG_DATABASES
 
 # Minimum length for phages (bp)
 PHAGE_MIN_LENGTH: 2000
@@ -47,5 +47,5 @@ CLUSTERING:
 
 # --- Execution & Batching ---
 BATCH_SIZE: 20
-THREADS_PER_BATCH: 24
+THREADS_PER_BATCH: 4
 SEARCH_TOOL: "hhblits_omp"

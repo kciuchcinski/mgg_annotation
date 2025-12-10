@@ -1,0 +1,22 @@
+name: phage_annotation
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - biopython=1.79
+  - pandas
+  - numpy
+  - seaborn
+  - matplotlib
+  - hhsuite
+  - mmseqs2=13.45111
+  - clustalo=1.2.4
+  - bedtools=2.30.0
+  - glimmer=3.02
+  - prodigal-gv=2.11.0
+  - ffindex
+  - pip
+  - pip:
+      - csb
