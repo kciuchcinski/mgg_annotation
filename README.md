@@ -19,6 +19,12 @@ Please note that nextflow requires Java to run. Check out [official nextflow doc
 
 Linux: Follow official installation instructions [here](https://github.com/apptainer/apptainer/blob/release-1.4/INSTALL.md)
 
+Before you run the pipeline, build the container with:
+
+```bash
+apptainer build phage_annotation.sif phage_annotation.def
+```
+
 2. Conda (alternative)
 
 If, for some reason, you cannot use apptainer, you can fall back to using Conda. We recommend using Micromamba or Mamba for faster installation, but standard Conda works too (see [this](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html) for installation instructions)
@@ -54,18 +60,34 @@ After the environment is created, you can skip setting up the container (step 4)
   -params-file config.yml
 ```
 
+2. Docker (recommended for macOS)
+
+On macOS (especially Apple Silicon), using Docker is often simpler than Apptainer or full Conda setups. This pipeline provides a Docker image that mirrors the Apptainer environment.
+
+Start by installing docker - [official docs](https://docs.docker.com/desktop/setup/install/mac-install/)
+
+Then, build the Docker image:
+
+```bash
+docker build --platform=linux/amd64 -t phage_annotation:latest .
+```
+
+Finally, run the pipeline with Docker:
+
+```bash
+./nextflow run main.nf \
+  -profile docker \
+  -params-file config.yml
+```
+
+On macOS, make sure Docker Desktop is installed and running before starting the pipeline.
+
 3. Clone the repository:
 ```bash
 git clone <your-repo-url>
 cd <your-repo-name>
 ```
 
-4. Build the Container:
-You must build the pipeline container image before the first run.
-
-```bash
-apptainer build phage_annotation.sif phage_annotation.def
-```
 
 ## Configuration
 CRITICAL: You must edit the configuration files to match your local environment before running the pipeline. The default configuration contains hardcoded paths specific to a cluster environment.
