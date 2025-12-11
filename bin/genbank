@@ -43,7 +43,7 @@ def main():
     # We want columns like 'PHROGS1_function' -> key 'PHROGS1'
     # and 'PHROGS1_params' -> key 'PHROGS1_params'
     function_cols = [c for c in annotation_df.columns if c.endswith('_function')]
-    params_cols = [c for c in annotation_df.columns if c.endswith('_params')]
+    params_cols = [c for c in annotation_df.columns if c.endswith('_evalue') or c.endswith('_bits') or c.endswith('_sig')]
     
     # Sort them to ensure deterministic order in qualifiers if needed
     function_cols.sort()
