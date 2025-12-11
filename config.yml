@@ -13,7 +13,7 @@ OUTPUT_DIR: output_test
 
 # Database root directory (use absolute path)
 # NOTE: You can also set per-db overrides in the DATABASES section below
-# DB_ROOT: /Users/karol/projects/mgg_annotation/databases
+DB_ROOT: /Users/karol/projects/mgg_annotation/databases
 
 # Minimum length for phages (bp)
 PHAGE_MIN_LENGTH: 2000
@@ -24,26 +24,29 @@ WRITE_SEARCH_TABLE: true
 # Enable to save the per-ORF annotation table (annotation.tsv) to OUTPUT_DIR
 WRITE_ANNOTATION_TABLE: true
 
+# Set how many functions per protein per database should be reported. We recommend 2.
+N_FUNCTIONS_PER_DB: 2
+
 # ==========================================
 # DATABASES
 # Default paths to databases are derived from DB_ROOT
 # You can uncomment the entries below to override specific database paths
 # ==========================================
 
-# Path to glimmer training file (usually .icm)
-GLIMMER_TRAIN: "/Users/karol/MGG Dropbox/Databases/Glimmer/training-file_refseq.icm"
+# # Path to glimmer training file (usually .icm)
+# GLIMMER_TRAIN: "/Users/karol/MGG Dropbox/Databases/Glimmer/training-file_refseq.icm"
 
-# Paths to HHSuite databases. They should contain the .ffdata and .ffindex files
-HHSUITE:
-  PHROGS: "/path/to/hhsuite_db/phrogs"
-  PFAM: "/path/to/hhsuite_db/pfam"
-  ECOD: "/path/to/hhsuite_db/ecod"
-  ALANDB: "/Users/karol/MGG Dropbox/Databases/AlanDavidson/profile-db/profiles"
+# # Paths to HHSuite databases. They should contain the .ffdata and .ffindex files
+# HHSUITE:
+#   PHROGS: "/path/to/hhsuite_db/phrogs"
+#   PFAM: "/path/to/hhsuite_db/pfam"
+#   ECOD: "/path/to/hhsuite_db/ecod"
+#   ALANDB: "/Users/karol/MGG Dropbox/Databases/AlanDavidson/profile-db/profiles"
 
-# Paths to metadata annotation tables. Those should point to specific csv/tsv files
-METADATA:
-  PHROGS_TABLE: "/path/to/metadata/phrog_annot_v4.tsv"
-  ALAN_TABLE: "/path/to/metadata/alan_annot.tsv"
+# # Paths to metadata annotation tables. Those should point to specific csv/tsv files
+# METADATA:
+#   PHROGS_TABLE: "/path/to/metadata/phrog_annot_v4.tsv"
+#   ALAN_TABLE: "/path/to/metadata/alan_annot.tsv"
 
 # ==========================================
 # ADVANCED CONFIGURATION

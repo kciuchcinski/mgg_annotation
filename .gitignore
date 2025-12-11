@@ -1,7 +1,7 @@
 test/output
 .snakemake
 nohup.out
-dependencies/scripts/__pycache__
+bin/__pycache__
 test/
 databases/
 cyanophages/

@@ -34,6 +34,9 @@ params.n_iter_alan   = params.n_iter_alan   ?: 1
 params.n_iter_pfam   = params.n_iter_pfam   ?: 2
 params.n_iter_ecod   = params.n_iter_ecod   ?: 2
 
+// How many functions per protein per database should be reported
+params.N_FUNCTIONS_PER_DB = params.N_FUNCTIONS_PER_DB ?: 2
+
 // Batch knobs
 params.chunk_size_a3m = params.chunk_size_a3m ?: params.BATCH_SIZE
 params.cpu_hhsuite    = params.cpu_hhsuite    ?: params.THREADS_PER_BATCH
@@ -213,10 +216,14 @@ process CLUSTERING {
 }
 
 process PCS2PROTEINS {
+  publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'PCs2proteins.tsv'
+
   input:
   path raw_pcs
+
   output:
   path "PCs2proteins.tsv"
+  
   shell:
   """
   set -euo pipefail
@@ -433,6 +440,7 @@ process BUILD_ANNOTATION {
       --pcs2proteins ${pcs2proteins_tsv} \\
       --report ${report_tsv} \\
       --write-annotation ${params.WRITE_ANNOTATION_TABLE} \\
+      --nfunc2report ${params.N_FUNCTIONS_PER_DB} \\
       --out-annotation-full annotation_full.tsv \\
       --out-annotation-public annotation.tsv
     """
@@ -527,7 +535,7 @@ workflow {
         ch_pfam_dir,
         ch_ecod_dir,
         ch_phrogs_tbl,
-        ch_alan_tbl,
+        ch_alan_tbl
     )
 
     // 6.2 Filter hits -> report.tsv

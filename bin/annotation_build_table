@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Build per-ORF annotation table (annotation.tsv) from filtered hits (report.tsv),
-including explicit significance columns for each reported function.
+Build per-ORF annotation table (annotation.tsv) from filtered hits (report.tsv)
 """
 
 import sys
@@ -92,6 +91,35 @@ def add_significance_column(df):
     df["report_significance"] = df.apply(_row_significance, axis=1)
     return df
 
+def report_db(dbid, df, nfunc2report, verbose=False):
+    """Unified wrapper around DB-specific report_* functions."""
+    if dbid == "PHROGS":
+        return report_phrogs(
+            df,
+            max_evalue=10 ** -3,
+            nfunc2report=nfunc2report,
+            verbose=verbose,
+        )
+    elif dbid == "ALANDB":
+        return report_alan(
+            df,
+            min_prob=0.95,
+            nfunc2report=nfunc2report,
+            verbose=verbose,
+        )
+    elif dbid == "PFAM":
+        return report_pfam(
+            df,
+            nfunc2report=nfunc2report,
+            verbose=verbose,
+        )
+    elif dbid == "ECOD":
+        return report_ecod(
+            df,
+            nfunc2report=nfunc2report,
+            verbose=verbose,
+        )
+
 
 # -----------------------------
 # Main script
@@ -103,6 +131,7 @@ def main():
     )
     parser.add_argument("--confident", required=True, help="Path to confident_orfs.csv")
     parser.add_argument("--pcs2proteins", required=True, help="Path to PCs2proteins.tsv")
+    parser.add_argument("--nfunc2report", type=int, default=2, help="Number of functions to report per DB")
     parser.add_argument("--report", required=True, help="Filtered per-hit table (report.tsv)")
     parser.add_argument(
         "--write-annotation",
@@ -148,25 +177,20 @@ def main():
         best_hits_dfs = []
         for pcid, pc in df.groupby("query"):
             # Default "no hit" frames
-            phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b = get_no_hit_frames(pcid)
+            phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b = get_no_hit_frames(pcid, args.nfunc2report)
 
             for dbid, db in pc.groupby("db"):
-                # For each DB, we keep the original best-hit selection
-                # but we also pass the precomputed report_significance
+                if db.empty:
+                    continue
+                db_best = report_db(dbid, db, nfunc2report=args.nfunc2report, verbose=False)
                 if dbid == "PHROGS":
-                    phrogs_df_b = report_phrogs(
-                        db, max_evalue=10 ** -3, nfunc2report=2, verbose=False
-                    )
+                    phrogs_df_b = db_best
                 elif dbid == "ALANDB":
-                    alan_df_b = report_alan(
-                        db, min_prob=0.95, nfunc2report=2, verbose=False
-                    )
+                    alan_df_b = db_best
                 elif dbid == "PFAM":
-                    pfam_df_b = report_pfam(db, verbose=False)
+                    pfam_df_b = db_best
                 elif dbid == "ECOD":
-                    ecod_df_b = report_ecod(db, verbose=False)
-                else:
-                    pass
+                    ecod_df_b = db_best
 
             best_hits_dfs.extend([phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b])
 
@@ -203,8 +227,12 @@ def main():
     best_hits_df["db_function"] = best_hits_df.apply(
         lambda row: row["report_label"] + "_function", axis=1
     )
-    best_hits_df["db_params"] = best_hits_df.apply(
-        lambda row: row["report_label"] + "_params", axis=1
+    # Build column names for bits and evalue
+    best_hits_df["db_bits"] = best_hits_df.apply(
+        lambda row: row["report_label"] + "_bits", axis=1
+    )
+    best_hits_df["db_evalue"] = best_hits_df.apply(
+        lambda row: row["report_label"] + "_evalue", axis=1
     )
     best_hits_df["db_function_sig"] = best_hits_df.apply(
         lambda row: row["report_label"] + "_function_sig", axis=1
@@ -214,20 +242,27 @@ def main():
     function_df = best_hits_df.pivot(
         columns="db_function", index="query", values="report_function"
     ).copy()
-    params_df = best_hits_df.pivot(
-        columns="db_params", index="query", values="report_params"
+    # Pivot bits and evalue separately
+    bits_df = best_hits_df.pivot(
+        columns="db_bits", index="query", values="bits"
+    ).copy()
+    evalue_df = best_hits_df.pivot(
+        columns="db_evalue", index="query", values="evalue"
     ).copy()
     sig_df = best_hits_df.pivot(
         columns="db_function_sig", index="query", values="report_significance"
     ).copy()
 
     function_df.index.name = "PC"
-    params_df.index.name = "PC"
+    bits_df.index.name = "PC"
+    evalue_df.index.name = "PC"
     sig_df.index.name = "PC"
 
     # Merge all PC-level info
-    report_df = function_df.merge(params_df, on="PC", how="left")
-    report_df = report_df.merge(sig_df, on="PC", how="left")
+    report_df = function_df.merge(sig_df, on="PC", how="left")
+    report_df = report_df.merge(bits_df, on="PC", how="left")
+    report_df = report_df.merge(evalue_df, on="PC", how="left")
+
     print("Done!")
 
     # Map PC-level functions back to proteins
@@ -241,41 +276,19 @@ def main():
     orfs_df = orfs_df.merge(report_df, on="PC", how="left")
     print("Done!")
 
-    # Desired column order
-    cols = [
-        "proteinID",
-        "PC",
-        "protein_len",
-        "ALAN1_function",
-        "ALAN1_function_sig",
-        "ALAN2_function",
-        "ALAN2_function_sig",
-        "ECOD_function",
-        "ECOD_function_sig",
-        "PFAM_function",
-        "PFAM_function_sig",
-        "PHROGS1_function",
-        "PHROGS1_function_sig",
-        "PHROGS2_function",
-        "PHROGS2_function_sig",
-        "protein",
-        "orf",
-        "start",
-        "stop",
-        "strand",
-        "contigID",
-        "orf_len",
-        "codon_stop",
-        "source",
-        "ALAN1_params",
-        "ALAN2_params",
-        "ECOD_params",
-        "PFAM_params",
-        "PHROGS1_params",
-        "PHROGS2_params",
+    # Identify dynamic columns
+    func_cols   = sorted(c for c in orfs_df.columns if c.endswith("_function"))
+    sig_cols    = sorted(c for c in orfs_df.columns if c.endswith("_function_sig"))
+    bits_cols   = sorted(c for c in orfs_df.columns if c.endswith("_bits"))
+    evalue_cols = sorted(c for c in orfs_df.columns if c.endswith("_evalue"))
+
+    fixed_prefix = ["proteinID", "PC", "protein_len"]
+    fixed_suffix = [
+        "protein", "orf", "start", "stop", "strand",
+        "contigID", "orf_len", "codon_stop", "source",
     ]
 
-    # Keep only columns that actually exist
+    cols = fixed_prefix + func_cols + sig_cols + fixed_suffix + bits_cols + evalue_cols
     cols_present = [c for c in cols if c in orfs_df.columns]
     orfs_df = orfs_df[cols_present]
     orfs_df = orfs_df.fillna("-")
@@ -285,6 +298,15 @@ def main():
     Path(args.out_annotation_full).parent.mkdir(parents=True, exist_ok=True)
     orfs_df.to_csv(args.out_annotation_full, sep="\t", index=False)
     print("Done!")
+
+    # Identify evalue columns
+    evalue_cols = [c for c in orfs_df.columns if c.endswith("_evalue")]
+
+    # Format evalues in scientific notation
+    for col in evalue_cols:
+        orfs_df[col] = orfs_df[col].apply(
+            lambda x: f'{float(x):.2e}' if str(x) != '-' and float(x) != 0 else ('0' if str(x) != '-' else '-')
+        )
 
     # Build public table (without sequences)
     seq_cols = [c for c in ["protein", "orf"] if c in orfs_df.columns]

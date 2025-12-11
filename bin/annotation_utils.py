@@ -78,29 +78,28 @@ def report_phrogs(df, max_evalue=10**-3, nfunc2report=2, verbose=False):
     ### report function
     top_hits_df = pd.concat([informative_df, noninformative_df, unknown_df]).iloc[:nfunc2report].copy()
     
-    # prepare columns2report
-    if len(top_hits_df) == 0:
-        top_hits_df = get_no_hit_row(2)    
-        top_hits_df['report_params'] = ['-', '-']
-    elif len(top_hits_df) == 1: 
-        holder_row = get_no_hit_row(1)
-        holder_row['report_params'] = '-'
-
-        bits, qcov = top_hits_df["bits"].iloc[0], top_hits_df["qcov"].iloc[0]
-        top_hits_df['report_params'] = f'bits: {int(bits):>5}  qcov: {qcov:.2f}'
-        top_hits_df = pd.concat([top_hits_df, holder_row])
-    else: 
-        top_hits_df['report_params'] = top_hits_df.apply(lambda row: f'bits: {int(row["bits"]):>5}  qcov: {row["qcov"]:>6.2f}', axis=1)
-
-    # report columns
-    labels = [f'PHROGS{i}' for i in range(1,len(top_hits_df)+1)]
+    # Handle empty/short results by padding with no-hit rows
+    if len(top_hits_df) < nfunc2report:
+        pad = get_no_hit_row(nfunc2report - len(top_hits_df))
+        pad['report_function'] = '-'
+        # bits/evalue in pad are 0
+        top_hits_df = pd.concat([top_hits_df, pad], ignore_index=True)
     
-    top_hits_df['query'] = [pcid] * len(top_hits_df)
+    # Truncate if too many
+    top_hits_df = top_hits_df.iloc[:nfunc2report].copy()
+
+    # Labels
+    labels = [f'PHROGS{i}' for i in range(1, len(top_hits_df)+1)]
+    top_hits_df['query'] = pcid
     top_hits_df['report_label'] = labels
     top_hits_df['report_function'] = top_hits_df['annot']
     top_hits_df['report_confidence'] = get_confidence_column(top_hits_df)
-            
-    if verbose: display(top_hits_df)
+    
+    # DO NOT create 'report_params' string here anymore
+    # Ensure bits/evalue are numeric
+    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits']).fillna(0)
+    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue']).fillna(0)
+    
     return top_hits_df
 
 
@@ -130,97 +129,183 @@ def report_alan(df, min_prob=0.95, nfunc2report=2, verbose=True):
     top_hits_df['query'] = [pcid] * len(top_hits_df)
     top_hits_df['report_label'] = labels
     top_hits_df['report_function'] = top_hits_df['category']
-    top_hits_df['report_params'] = top_hits_df.apply(lambda row: f'bits: {int(row["bits"]):>5}  eval: {row["evalue"]:>6.1E}', axis=1)
+    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits']).fillna(0)
+    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue']).fillna(0)
     top_hits_df['report_confidence'] = get_confidence_column(top_hits_df)
             
     if verbose: display(top_hits_df)
 
     return top_hits_df
 
+def get_ecod_x(row):
+    """
+    Extract ECOD X-level from the 'name' field.
 
+    Example ECOD name (generic):
+      A|FXXXX|...|X: X-group-id, H: ..., T: ..., F: ...
 
-def report_ecod(df, verbose=True):
-    """ report best hit [max bitscore] """
+    This function should return the X-group identifier as a string.
+    """
+    name = str(row.get("name", ""))
+    try:
+        parts = name.split("|")
+        # parts[3] is usually the hierarchical annotation text
+        levels = parts[3].split(": ")
+        # "... X: <X-ID>, H: ..."  -> pick the X element
+        # levels[2] should contain something like "X: <X-ID>, H"
+        x_part = levels[2]          # e.g. "X: 1234, H"
+        x_id = x_part.split(",")[0] # "X: 1234"
+        x_id = x_id.split()[-1]     # "1234"
+        return x_id
+    except Exception:
+        return "-"
+        
+def report_ecod(df, nfunc2report=1, verbose=True):
+    """
+    Report up to nfunc2report ECOD X-groups for a PC.
+    """
+    pcid = df["query"].unique()[0]
+
+    if df.empty:
+        top_hits_df = get_no_hit_row(nfunc2report)
+        top_hits_df["report_function"] = "-"
+        top_hits_df["report_params"] = "-"
+        # ensure numeric
+        top_hits_df['bits'] = 0.0
+        top_hits_df['evalue'] = 0.0
+    else:
+        # Extract X level
+        if "ecod_x" not in df.columns:
+            df = df.copy()
+            df["ecod_x"] = df.apply(get_ecod_x, axis=1)
+
+        # Best hit per X group (max bits)
+        best_per_x = (
+            df.loc[df.groupby("ecod_x")["bits"].idxmax()]
+              .sort_values("bits", ascending=False)
+              .copy()
+        )
+
+        # Keep at most nfunc2report X groups
+        best_per_x = best_per_x.iloc[:nfunc2report].copy()
+
+        # Build function string
+        def _ecod_function(row):
+            name = row["name"]
+            try:
+                parts = name.split("|")
+                F_INDEX = parts[1].strip()
+                ecod_levels = parts[3]
+                levels = ecod_levels.split(": ")
+                T = levels[4].strip(", F")
+                F = levels[5].strip()
+                return f"X: {row['ecod_x']} T: {T}, F: {F} [{F_INDEX}]"
+            except Exception:
+                return name
+
+        best_per_x["report_function"] = best_per_x.apply(_ecod_function, axis=1)
+        
+        top_hits_df = best_per_x
+
+        # Pad with no-hit rows if fewer than requested
+        if len(top_hits_df) < nfunc2report:
+            pad = get_no_hit_row(nfunc2report - len(top_hits_df))
+            pad["report_function"] = "-"
+            pad['bits'] = 0.0
+            pad['evalue'] = 0.0
+            top_hits_df = pd.concat([top_hits_df, pad], ignore_index=True)
+
+    # Labels: ECOD1, ECOD2, ...
+    labels = [f"ECOD{i}" for i in range(1, len(top_hits_df) + 1)]
+    top_hits_df["query"] = pcid
+    top_hits_df["report_label"] = labels
+    top_hits_df["report_confidence"] = get_confidence_column(top_hits_df)
     
-    # get PC name
+    # Ensure numeric columns are strictly numeric
+    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits']).fillna(0)
+    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue']).fillna(0)
+
+    if verbose:
+        display(top_hits_df)
+
+    return top_hits_df
+
+
+def report_pfam(df, nfunc2report=1, verbose=True):
+    """Report up to nfunc2report PFAM functions (informative first)."""
     pcid = df['query'].unique()[0]
-    
-    # sort significant hits
-    df = df.sort_values('bits', ascending=False)
-    
-    # best hit
-    top_hit_df = df.iloc[0].copy()
-    
-    # report function    
-    if len(top_hit_df) != 0: 
-        name = top_hit_df['name']
-        F_INDEX, ecod_levels = name.split('|')[1].strip(), name.split('|')[3]
-        T, F = ecod_levels.split(': ')[4].strip(', F'), ecod_levels.split(': ')[5].strip()
-        report_function = f'T: {T}, F: {F} [{F_INDEX}]'
-        report_params = f'bits: {int(top_hit_df["bits"]):>5}  eval: {top_hit_df["evalue"]:>6.1E}'
-    else: # no hit
-        top_hits_df = get_no_hit_row(1).iloc[0]
-        report_function, report_params = '-', '-'
 
-    # report columns
-    top_hit_df['query'] = pcid
-    top_hit_df['report_label'] = 'ECOD'
-    top_hit_df['report_function'] = report_function
-    top_hit_df['report_params'] = report_params
-    top_hit_df['report_confidence'] = get_confidence_column(top_hit_df)
-            
-    if verbose: display(top_hit_df.to_frame().T)
-    return top_hit_df.to_frame().T
-
-
-def report_pfam(df, verbose=True):
-    
-    # get PC name
-    pcid = df['query'].unique()[0]
-    
-    # sort hits
+    # Informative first, then DUF, ordered by bits
     informative_df = df.query('~name.str.contains("DUF")').sort_values('bits', ascending=False)
     noninformative_df = df.query('name.str.contains("DUF")').sort_values('bits', ascending=False)
-    df = pd.concat([informative_df, noninformative_df])
+    df_sorted = pd.concat([informative_df, noninformative_df])
+
+    if df_sorted.empty:
+        top_hits_df = get_no_hit_row(nfunc2report)
+        top_hits_df['report_function'] = '-'
+        top_hits_df['bits'] = 0.0
+        top_hits_df['evalue'] = 0.0
+    else:
+        def _pfam_function(row):
+            name = row['name']
+            try:
+                pfamID, func_short, func_detailed = [p.strip() for p in name.split(';')[:3]]
+                return f'{func_detailed} [{func_short}] [{pfamID}]'
+            except Exception:
+                return name
+
+        df_with = df_sorted.copy()
+        df_with["report_function"] = df_with.apply(_pfam_function, axis=1)
+        
+        top_hits_df = df_with.iloc[:nfunc2report].copy()
+
+        if len(top_hits_df) < nfunc2report:
+            pad = get_no_hit_row(nfunc2report - len(top_hits_df))
+            pad['report_function'] = '-'
+            pad['bits'] = 0.0
+            pad['evalue'] = 0.0
+            top_hits_df = pd.concat([top_hits_df, pad], ignore_index=True)
+
+
+    labels = [f'PFAM{i}' for i in range(1, len(top_hits_df) + 1)]
+    top_hits_df['query'] = pcid
+    top_hits_df['report_label'] = labels
+    top_hits_df['report_confidence'] = get_confidence_column(top_hits_df)
+
+    # Ensure numeric columns are strictly numeric
+    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits']).fillna(0)
+    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue']).fillna(0)
+
+    if verbose:
+        display(top_hits_df)
+
+    return top_hits_df
+
+def get_no_hit_frames(pcid, nfunc2report):
+    """
+    Return 4 dataframes (PHROGS, ALAN, PFAM, ECOD) with 'nfunc2report' rows each.
+    Labels are numbered (e.g., PHROGS1, PHROGS2) to match hit frames.
+    """
+    dfs = []
+    # Order must match the unpacking in the main script
+    db_names = ['PHROGS', 'ALAN', 'PFAM', 'ECOD'] 
     
-    # best hit & function2report
-    if len(df) != 0: 
-        top_hit_df = df.iloc[0].copy()
-        name = top_hit_df['name']
-        pfamID, func_short, func_detailed = name.split(';')[0].strip(), name.split(';')[1].strip(), name.split(';')[2].strip()
-        report_function = f'{func_detailed} [{func_short}] [{pfamID}]'
-        report_params = f'bits: {int(top_hit_df["bits"]):>5}  eval: {top_hit_df["evalue"]:>6.1E}'
-    else: # no hit 
-        top_hit_df = get_no_hit_row(1).iloc[0]
-        report_function, report_params = '-', '-'
-    
-    
-    # report columns
-    top_hit_df['query'] = pcid
-    top_hit_df['report_label'] = 'PFAM'
-    top_hit_df['report_function'] = report_function
-    top_hit_df['report_params'] = report_params
-    top_hit_df['report_confidence'] = get_confidence_column(top_hit_df)
-            
-    if verbose: display(top_hit_df.to_frame().T)
-    return top_hit_df.to_frame().T
-
-
-
-def get_no_hit_frames(pcid):
-
-    # by defalut: no hit
-    phrogs_df, alan_df, pfam_df, ecod_df = get_no_hit_row(2), get_no_hit_row(2), get_no_hit_row(1), get_no_hit_row(1)
-
-    dfs = [phrogs_df, alan_df, pfam_df, ecod_df]
-    report_labels = [['PHROGS1', 'PHROGS2'], ['ALAN1', 'ALAN2'], ['PFAM'], ['ECOD']]
-
-    for df, labels in zip(dfs, report_labels):
+    for db in db_names:
+        # Create n rows
+        df = get_no_hit_row(nfunc2report)
         df['query'] = pcid
         df['report_confidence'] = get_confidence_column(df)
-        df['report_label'] = labels
         
-    return phrogs_df, alan_df, pfam_df, ecod_df
+        # Assign numbered labels: DB1, DB2, ... DBn
+        df['report_label'] = [f"{db}{i+1}" for i in range(nfunc2report)]
+        
+        # Explicitly set numeric columns to float/int 0
+        df['bits'] = 0.0
+        df['evalue'] = 0.0
+        
+        dfs.append(df)
+        
+    return tuple(dfs)
 
 def get_confidence_column(df, eval_intervals=(10**-10, 10**-5, 10**-3, 1), col='evalue', verbose=False):
     # df = pd.DataFrame({'evalue': [10**-10, 10**-7, 10**-3, 10, 10**2, 0]})

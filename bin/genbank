@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate genbank files of prophages.
+Generate GenBank files of prophages with dynamic annotation columns.
 """
 
 import argparse
@@ -10,7 +10,6 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqFeature import SeqFeature, FeatureLocation
 from Bio.SeqRecord import SeqRecord
-
 
 def main():
     parser = argparse.ArgumentParser(description='Generate GenBank files of prophages')
@@ -25,7 +24,9 @@ def main():
     genbank_dir.mkdir(exist_ok=True, parents=True)
 
     # Load inputs
+    print(f"Loading annotation from {annotation_path}...")
     annotation_df = pd.read_csv(annotation_path, sep='\t')
+    print(f"Loading metadata from {metadata_path}...")
     metadata_df = pd.read_csv(metadata_path, sep='\t')
 
     # Handle case where annotation file is empty
@@ -33,75 +34,91 @@ def main():
         print("Annotation file is empty. No GenBank files will be generated.")
         return
 
-    # Extract contigID from proteinID
-    if 'proteinID' in annotation_df.columns:
+    # Extract contigID from proteinID if not present
+    if 'contigID' not in annotation_df.columns and 'proteinID' in annotation_df.columns:
+        # Regex provided in original script
         annotation_df['contigID'] = annotation_df['proteinID'].str.split(r'_PROTEIN_*', expand=True)[0]
+
+    # Identify dynamic annotation columns
+    # We want columns like 'PHROGS1_function' -> key 'PHROGS1'
+    # and 'PHROGS1_params' -> key 'PHROGS1_params'
+    function_cols = [c for c in annotation_df.columns if c.endswith('_function')]
+    params_cols = [c for c in annotation_df.columns if c.endswith('_params')]
+    
+    # Sort them to ensure deterministic order in qualifiers if needed
+    function_cols.sort()
+    params_cols.sort()
+
+    print(f"Found function columns: {function_cols}")
+    print(f"Found params columns: {params_cols}")
 
     # Group by contigID and write GenBank files
     for phageID, group in annotation_df.groupby('contigID'):
-
-        features = []
-
+        
         # Get phage nucleotide sequence
         seq_row = metadata_df[metadata_df['contigID'] == phageID]
         if seq_row.empty:
             print(f"Warning: No sequence found in metadata for contigID {phageID}")
             continue
-        seq = seq_row['seq'].values[0]
+        
+        # Create SeqRecord
+        seq_str = seq_row['seq'].values[0]
+        record = SeqRecord(Seq(seq_str), id=str(phageID))
+        record.annotations['molecule_type'] = 'DNA'
+        record.name = str(phageID)[:16]  # GenBank locus tag limit is mostly strict on older parsers
+        record.description = f"Prophage {phageID}"
+        record.organism = 'Phage'
 
-        genbank_path = genbank_dir / f"{phageID}.gb"
-
+        features = []
         for _, row in group.iterrows():
+            # Basic location info
             start, stop, strand = row['start'], row['stop'], row['strand']
-            pc, proteinID, orf, protein = row['PC'], row['proteinID'], row['orf'], row['protein']
-
-            PHROG1_function, PHROG2_function = row['PHROGS1_function'], row['PHROGS2_function']
-            PHROG1_params, PHROG2_params = row['PHROGS1_params'], row['PHROGS2_params']
-            ALAN1_function, ALAN2_function = row['ALAN1_function'], row['ALAN2_function']
-            ALAN1_params, ALAN2_params = row['ALAN1_params'], row['ALAN2_params']
-            PFAM_function, PFAM_params = row['PFAM_function'], row['PFAM_params']
-            ECOD_function, ECOD_params = row['ECOD_function'], row['ECOD_params']
-
-            # Ensure valid genomic interval regardless of strand
+            
+            # Ensure valid genomic interval
             left = min(int(start), int(stop))
             right = max(int(start), int(stop))
             strand_int = -1 if str(strand) == '-' else 1
 
+            # Base qualifiers
+            qualifiers = {
+                'proteinID': [str(row['proteinID'])],
+                'PC': [str(row.get('PC', '-'))],
+                'seq': [str(row.get('orf', ''))],
+                'translation': [str(row.get('protein', ''))],
+            }
+
+            # Add function qualifiers dynamically
+            # e.g. row['PHROGS1_function'] -> qualifiers['PHROGS1']
+            for col in function_cols:
+                val = row[col]
+                # Filter out NaNs if any, but keep '-' if that's your format
+                if pd.notna(val):
+                    key = col.replace('_function', '')  # PHROGS1_function -> PHROGS1
+                    qualifiers[key] = [str(val)]
+
+            # Add param qualifiers dynamically
+            # e.g. row['PHROGS1_params'] -> qualifiers['PHROGS1_params']
+            for col in params_cols:
+                val = row[col]
+                if pd.notna(val):
+                    key = col  # Keep full name for params
+                    qualifiers[key] = [str(val)]
+
             feature = SeqFeature(
                 FeatureLocation(left - 1, right, strand=strand_int),
-                type='CDS'
+                type='CDS',
+                qualifiers=qualifiers
             )
-            
-            qualifiers = {
-                'PHROG1': [PHROG1_function],
-                'PHROG2': [PHROG2_function],
-                'ALAN1': [ALAN1_function],
-                'ALAN2': [ALAN2_function],
-                'PFAM': [PFAM_function],
-                'ECOD': [ECOD_function],
-                'PHROG1_params': [PHROG1_params],
-                'PHROG2_params': [PHROG2_params],
-                'ALAN1_params': [ALAN1_params],
-                'ALAN2_params': [ALAN2_params],
-                'PFAM_params': [PFAM_params],
-                'ECOD_params': [ECOD_params],
-                'proteinID': [proteinID],
-                'PC': [pc],
-                'seq': [orf],
-                'translation': [protein],
-            }
-            feature.qualifiers = qualifiers
             features.append(feature)
 
-        record = SeqRecord(Seq(seq), id=phageID)
-        record.annotations['molecule_type'] = 'DNA'
         record.features = features
-        record.name = ''
-        record.description = ''
-        record.organism = ''
+        
+        # Write to file
+        genbank_path = genbank_dir / f"{phageID}.gb"
+        with open(genbank_path, 'w') as f:
+            SeqIO.write(record, f, 'genbank')
 
-        SeqIO.write(record, genbank_path, 'genbank')
-
+    print(f"GenBank generation complete. Output in: {genbank_dir}")
 
 if __name__ == '__main__':
     main()
