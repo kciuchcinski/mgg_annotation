@@ -20,6 +20,7 @@ def get_phrog(row):
     else:
         return 0
 
+
 def get_hits(tables, dbname='UNKNOWN'):
     """Parse .hhr files into a per-hit DataFrame."""
     colnames = [
@@ -84,7 +85,6 @@ def main():
     parser.add_argument("--pfam-dir", required=True, help="Directory with PFAM .a3m files")
     parser.add_argument("--ecod-dir", required=True, help="Directory with ECOD .a3m files")
     parser.add_argument("--phrogs-table", required=True, help="PHROGS metadata table (TSV)")
-    parser.add_argument("--mgg-phrogs-table", required=True, help="MGG PHROGS mapping table (CSV with ;)")  # kept for compatibility
     parser.add_argument("--alan-table", required=True, help="ALAN metadata table (TSV or CSV)")
     parser.add_argument("--write-search", required=True, help="Boolean flag: write search.tsv or not")
     parser.add_argument("--out-search", required=True, help="Output path for search.tsv")
@@ -110,16 +110,7 @@ def main():
     # Load PHROGS and ALAN metadata and attach basic fields (optional at this stage)
     print("Loading PHROGS & ALAN metadata... ", end="")
     phrogs_annot_df = pd.read_csv(args.phrogs_table, sep="\t")
-    mgg_phrogs_annot_df = pd.read_csv(args.mgg_phrogs_table, sep=";")
-    mgg_phrogs_annot_df = mgg_phrogs_annot_df.rename(
-        columns={"funct.orig": "annot", "funct.new": "annot_mgg"}
-    )[["annot", "annot_mgg"]]
-
-    phrogs_annot_df = (
-        phrogs_annot_df.merge(mgg_phrogs_annot_df, on="annot", how="left")
-        .drop("annot", axis=1)
-        .rename(columns={"annot_mgg": "annot"})
-    )
+    # mgg_phrogs_table usage removed; use phrogs_table as is
     phrogs_annot_df = phrogs_annot_df[
         ["phrog", "color", "annot", "category"]
     ].fillna("unknown function")

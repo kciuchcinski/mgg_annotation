@@ -26,7 +26,6 @@ params.HHSUITE.ALANDB     = params.HHSUITE.ALANDB ?: "${params.DB_ROOT}/AlanDavi
 
 params.METADATA                          = params.METADATA ?: [:]
 params.METADATA.PHROGS_TABLE             = params.METADATA.PHROGS_TABLE     ?: "${params.DB_ROOT}/tables/phrog_annot_v4.tsv"
-params.METADATA.MGG_PHROGS_TABLE         = params.METADATA.MGG_PHROGS_TABLE ?: "${params.DB_ROOT}/tables/v3_phrogs-table-rafal-3_12.csv"
 params.METADATA.ALAN_TABLE               = params.METADATA.ALAN_TABLE       ?: "${params.DB_ROOT}/tables/alan_annot.tsv"
 
 // DB iterations – also need defaults
@@ -365,7 +364,6 @@ process COLLECT_HITS {
     path ecod_dir
     path phrogs_tbl
     path alan_tbl
-    path mgg_phrogs_tbl
 
     output:
     path "search.tsv"
@@ -379,7 +377,6 @@ process COLLECT_HITS {
       --pfam-dir   ${pfam_dir} \\
       --ecod-dir   ${ecod_dir} \\
       --phrogs-table ${phrogs_tbl} \\
-      --mgg-phrogs-table ${mgg_phrogs_tbl} \\
       --alan-table ${alan_tbl} \\
       --write-search ${params.WRITE_SEARCH_TABLE} \\
       --out-search search.tsv
@@ -520,7 +517,6 @@ workflow {
     def ch_ecod_dir   = ch_gathered_dirs.filter { it[0] == 'ECOD'   }.map { it[1] }.collect()
 
     def ch_phrogs_tbl = Channel.value(file(params.METADATA.PHROGS_TABLE))
-    def ch_mgg_tbl    = Channel.value(file(params.METADATA.MGG_PHROGS_TABLE))
     def ch_alan_tbl   = Channel.value(file(params.METADATA.ALAN_TABLE))
 
     // 6.1 Collect raw hits (search.tsv)
@@ -532,7 +528,6 @@ workflow {
         ch_ecod_dir,
         ch_phrogs_tbl,
         ch_alan_tbl,
-        ch_mgg_tbl
     )
 
     // 6.2 Filter hits -> report.tsv
