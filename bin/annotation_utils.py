@@ -29,112 +29,75 @@ def combine_function_and_confidence(row):
 
 
 def report_phrogs(df, max_evalue=10**-3, nfunc2report=2, verbose=False):
-
-    """
-    report a specific number (nfunc2report) of unique functions that got significat (max_evalue) hit(s).
-    However, firsty report function significant (not in non-informative list of functions), secondly non-informative functions, lastly unknown functions.
-    
-    Algorithm:
-    1. Filter eval 10**-3
-    2. Remove unknown function [REPORT ONLY WHEN NO OTHER FUNCTION, PRIORITY-0]
-    3. Remove non-informative functions (lytic tail protein, tail protein, structural protein, virion structural protein, minor tail protein ...) [REPORT ONLY WHEN NO OTHER FUNCTION; PRIORITY-1]
-    4. Group by unique functions. For each function report independently max bitscore and max qcov (hits to this function).
-    5. Take two functions with highest bitscores.
-    6. Report {confidence} {function} in one genbank field, and in seperate field bitscore and qcov.
-    7. Report two best PHROG hits seperataly (in total four PHROGS field: 2x function with confidence and 2x params: bitscore and qcov) [PRIORITY-2]
-    
-    """
-    
-    # get PC name
     pcid = df['query'].unique()[0]
-    
-    ### get filters
-    noninformative_functions = ['lytic tail protein', 'tail protein', 'structural protein', 'virion structural protein', 'minor tail protein']
+    noninformative_functions = [
+        'lytic tail protein', 'tail protein', 'structural protein',
+        'virion structural protein', 'minor tail protein'
+    ]
 
-    filt_evalue = 'evalue <= @max_evalue'
-    get_unknown = '(annot == "unknown function")'
-    get_noninformative_functions = '(annot.isin(@noninformative_functions))'
-    remove_unknown = '~' + get_unknown
-    remove_noninformative = '~' + get_noninformative_functions
-    
-    informative_query = ' and '.join([remove_unknown, remove_noninformative])
-    noninformative_query = get_noninformative_functions
+    df2 = df.copy()
+    df2['evalue'] = pd.to_numeric(df2['evalue'], errors='coerce').fillna(np.inf)
+    df2 = df2[df2['evalue'] <= max_evalue]
 
-    ### significat only
-    df = df.query(filt_evalue)
-    
-    ### get informative hits
-    informative_df = df.query(informative_query)
-    informative_df = get_unique_functions_frame(informative_df, function_column='annot') # best hit [max bit score] & highest qcov
+    if df2.empty:
+        top_hits_df = get_no_hit_row(nfunc2report)
+        top_hits_df['query'] = pcid
+        top_hits_df['report_label'] = [f'PHROGS{i}' for i in range(1, nfunc2report+1)]
+        top_hits_df['report_function'] = '-'
+        top_hits_df['bits'] = 0.0
+        top_hits_df['evalue'] = 0.0
+        top_hits_df['report_confidence'] = get_confidence_column(top_hits_df)
+        return top_hits_df
 
-    ### noninformative hits
-    noninformative_df = df.query(get_noninformative_functions)
-    noninformative_df = get_unique_functions_frame(noninformative_df, function_column='annot') # best hit [max bit score] & highest qcov
-        
-    ### uknown hits
-    unknown_df = df.query(get_unknown)
-    unknown_df = get_unique_functions_frame(unknown_df, function_column='annot') # best hit [max bit score] & highest qcov
+    unknown_mask = df2['annot'].eq("unknown function")
+    noninfo_mask = df2['annot'].isin(noninformative_functions)
 
-    ### report function
-    top_hits_df = pd.concat([informative_df, noninformative_df, unknown_df]).iloc[:nfunc2report].copy()
-    
-    # Handle empty/short results by padding with no-hit rows
+    informative_df = get_unique_functions_frame(df2[~unknown_mask & ~noninfo_mask], function_column='annot')
+    noninformative_df = get_unique_functions_frame(df2[noninfo_mask], function_column='annot')
+    unknown_df = get_unique_functions_frame(df2[unknown_mask], function_column='annot')
+
+    top_hits_df = pd.concat([informative_df, noninformative_df, unknown_df], ignore_index=True).iloc[:nfunc2report].copy()
+
     if len(top_hits_df) < nfunc2report:
         pad = get_no_hit_row(nfunc2report - len(top_hits_df))
         pad['report_function'] = '-'
-        # bits/evalue in pad are 0
+        pad['bits'] = 0.0
+        pad['evalue'] = 0.0
         top_hits_df = pd.concat([top_hits_df, pad], ignore_index=True)
-    
-    # Truncate if too many
-    top_hits_df = top_hits_df.iloc[:nfunc2report].copy()
 
-    # Labels
-    labels = [f'PHROGS{i}' for i in range(1, len(top_hits_df)+1)]
+    top_hits_df = top_hits_df.iloc[:nfunc2report].copy()
     top_hits_df['query'] = pcid
-    top_hits_df['report_label'] = labels
+    top_hits_df['report_label'] = [f'PHROGS{i}' for i in range(1, len(top_hits_df)+1)]
     top_hits_df['report_function'] = top_hits_df['annot']
+    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits'], errors='coerce').fillna(0.0)
+    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue'], errors='coerce').fillna(0.0)
     top_hits_df['report_confidence'] = get_confidence_column(top_hits_df)
-    
-    # DO NOT create 'report_params' string here anymore
-    # Ensure bits/evalue are numeric
-    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits']).fillna(0)
-    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue']).fillna(0)
-    
     return top_hits_df
 
 
-def report_alan(df, min_prob=0.95, nfunc2report=2, verbose=True):
-    """ report a specific number (nfunc2report) of unique functions that got significat (min_prob) hit(s). """
-    
-    # get PC name
+
+def report_alan(df, min_prob=0.95, nfunc2report=2, verbose=False):
     pcid = df['query'].unique()[0]
-    
-    # significant & best hits
-    df = df.query('prob >= @min_prob')
-    df = get_unique_functions_frame(df, function_column='category')
-    top_hits_df = df.sort_values('bits', ascending=False).iloc[:nfunc2report].copy()
-    
-    ### report function
-    # prepare columns2report
-    if len(top_hits_df) == 0: 
-        top_hits_df = get_no_hit_row(2)    
-    elif len(top_hits_df) == 1: 
-        holder_row = get_no_hit_row(1)
-        top_hits_df = pd.concat([top_hits_df, holder_row])
-    else: pass
+    df2 = df.copy()
+    df2['prob'] = pd.to_numeric(df2['prob'], errors='coerce').fillna(0.0)
+    df2 = df2[df2['prob'] >= min_prob]
 
-    # report columns
-    labels = [f'ALAN{i}' for i in range(1,len(top_hits_df)+1)]
-    
-    top_hits_df['query'] = [pcid] * len(top_hits_df)
-    top_hits_df['report_label'] = labels
-    top_hits_df['report_function'] = top_hits_df['category']
-    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits']).fillna(0)
-    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue']).fillna(0)
+    df2 = get_unique_functions_frame(df2, function_column='category')
+    top_hits_df = df2.sort_values('bits', ascending=False).iloc[:nfunc2report].copy()
+
+    if len(top_hits_df) < nfunc2report:
+        pad = get_no_hit_row(nfunc2report - len(top_hits_df))
+        pad['report_function'] = '-'
+        pad['bits'] = 0.0
+        pad['evalue'] = 0.0
+        top_hits_df = pd.concat([top_hits_df, pad], ignore_index=True)
+
+    top_hits_df['query'] = pcid
+    top_hits_df['report_label'] = [f'ALAN{i}' for i in range(1, len(top_hits_df)+1)]
+    top_hits_df['report_function'] = top_hits_df.get('category', '-')
+    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits'], errors='coerce').fillna(0.0)
+    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue'], errors='coerce').fillna(0.0)
     top_hits_df['report_confidence'] = get_confidence_column(top_hits_df)
-            
-    if verbose: display(top_hits_df)
-
     return top_hits_df
 
 def get_ecod_x(row):
@@ -231,80 +194,64 @@ def report_ecod(df, nfunc2report=1, verbose=True):
     return top_hits_df
 
 
-def report_pfam(df, nfunc2report=1, verbose=True):
-    """Report up to nfunc2report PFAM functions (informative first)."""
+def report_pfam(df, nfunc2report=1, verbose=False):
     pcid = df['query'].unique()[0]
+    df2 = df.copy()
 
-    # Informative first, then DUF, ordered by bits
-    informative_df = df.query('~name.str.contains("DUF")').sort_values('bits', ascending=False)
-    noninformative_df = df.query('name.str.contains("DUF")').sort_values('bits', ascending=False)
-    df_sorted = pd.concat([informative_df, noninformative_df])
+    # Avoid query('name.str.contains') overhead
+    name = df2['name'].astype('string')
+    is_duf = name.str.contains("DUF", na=False)
+
+    informative_df = df2[~is_duf].sort_values('bits', ascending=False)
+    noninformative_df = df2[is_duf].sort_values('bits', ascending=False)
+    df_sorted = pd.concat([informative_df, noninformative_df], ignore_index=True)
 
     if df_sorted.empty:
         top_hits_df = get_no_hit_row(nfunc2report)
+        top_hits_df['query'] = pcid
+        top_hits_df['report_label'] = [f'PFAM{i}' for i in range(1, nfunc2report+1)]
         top_hits_df['report_function'] = '-'
         top_hits_df['bits'] = 0.0
         top_hits_df['evalue'] = 0.0
-    else:
-        def _pfam_function(row):
-            name = row['name']
-            try:
-                pfamID, func_short, func_detailed = [p.strip() for p in name.split(';')[:3]]
-                return f'{func_detailed} [{func_short}] [{pfamID}]'
-            except Exception:
-                return name
+        top_hits_df['report_confidence'] = get_confidence_column(top_hits_df)
+        return top_hits_df
 
-        df_with = df_sorted.copy()
-        df_with["report_function"] = df_with.apply(_pfam_function, axis=1)
-        
-        top_hits_df = df_with.iloc[:nfunc2report].copy()
+    def _pfam_function(row):
+        name = row['name']
+        try:
+            pfamID, func_short, func_detailed = [p.strip() for p in str(name).split(';')[:3]]
+            return f'{func_detailed} [{func_short}] [{pfamID}]'
+        except Exception:
+            return str(name)
 
-        if len(top_hits_df) < nfunc2report:
-            pad = get_no_hit_row(nfunc2report - len(top_hits_df))
-            pad['report_function'] = '-'
-            pad['bits'] = 0.0
-            pad['evalue'] = 0.0
-            top_hits_df = pd.concat([top_hits_df, pad], ignore_index=True)
+    top_hits_df = df_sorted.iloc[:nfunc2report].copy()
+    if len(top_hits_df) < nfunc2report:
+        pad = get_no_hit_row(nfunc2report - len(top_hits_df))
+        pad['report_function'] = '-'
+        pad['bits'] = 0.0
+        pad['evalue'] = 0.0
+        top_hits_df = pd.concat([top_hits_df, pad], ignore_index=True)
 
-
-    labels = [f'PFAM{i}' for i in range(1, len(top_hits_df) + 1)]
+    top_hits_df['report_function'] = top_hits_df.apply(_pfam_function, axis=1)
     top_hits_df['query'] = pcid
-    top_hits_df['report_label'] = labels
+    top_hits_df['report_label'] = [f'PFAM{i}' for i in range(1, len(top_hits_df)+1)]
+    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits'], errors='coerce').fillna(0.0)
+    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue'], errors='coerce').fillna(0.0)
     top_hits_df['report_confidence'] = get_confidence_column(top_hits_df)
-
-    # Ensure numeric columns are strictly numeric
-    top_hits_df['bits'] = pd.to_numeric(top_hits_df['bits']).fillna(0)
-    top_hits_df['evalue'] = pd.to_numeric(top_hits_df['evalue']).fillna(0)
-
-    if verbose:
-        display(top_hits_df)
-
     return top_hits_df
 
 def get_no_hit_frames(pcid, nfunc2report):
-    """
-    Return 4 dataframes (PHROGS, ALAN, PFAM, ECOD) with 'nfunc2report' rows each.
-    Labels are numbered (e.g., PHROGS1, PHROGS2) to match hit frames.
-    """
     dfs = []
-    # Order must match the unpacking in the main script
-    db_names = ['PHROGS', 'ALAN', 'PFAM', 'ECOD'] 
-    
+    db_names = ['PHROGS', 'ALAN', 'PFAM', 'ECOD']
     for db in db_names:
-        # Create n rows
         df = get_no_hit_row(nfunc2report)
         df['query'] = pcid
-        df['report_confidence'] = get_confidence_column(df)
-        
-        # Assign numbered labels: DB1, DB2, ... DBn
         df['report_label'] = [f"{db}{i+1}" for i in range(nfunc2report)]
-        
-        # Explicitly set numeric columns to float/int 0
+        df['report_function'] = '-'
+        df['report_confidence'] = '-'   # no-hit always '-'
         df['bits'] = 0.0
         df['evalue'] = 0.0
-        
         dfs.append(df)
-        
     return tuple(dfs)
 
 def get_confidence_column(df, eval_intervals=(10**-10, 10**-5, 10**-3, 1), col='evalue', verbose=False):
@@ -344,47 +291,43 @@ def get_confidence_column(df, eval_intervals=(10**-10, 10**-5, 10**-3, 1), col='
     return np.select(conditions, choices, default='?')
 
 
-def get_no_hit_row(n, columns_mapper = {'query': 'string', 'target': 'string', 'prob': 'float', \
-                                        'pvalue': 'float', 'ident': 'float', 'qcov': 'float', \
-                                        'tcov': 'float', 'bits': 'float', 'qstart': 'int', \
-                                        'qend': 'int', 'qlength': 'int', 'tstart': 'int', \
-                                        'tend': 'int', 'tlength': 'int', 'evalue': 'float', \
-                                        'db': 'string', 'name': 'string', 'color': 'string', \
-                                        'annot': 'string', 'category': 'string', 'phrog/alan_profile': 'string',
-                                        'report_label': 'string', 'report_function': 'string', 'report_params': 'string'}):
-    
-    """ Give dict of column names and variable types to create 'no hit' row as data frame object """
+def get_no_hit_row(n, columns_mapper=None):
+    if columns_mapper is None:
+        columns_mapper = {
+            'query': 'string', 'target': 'string', 'prob': 'float',
+            'pvalue': 'float', 'ident': 'float', 'qcov': 'float',
+            'tcov': 'float', 'bits': 'float', 'qstart': 'int',
+            'qend': 'int', 'qlength': 'int', 'tstart': 'int',
+            'tend': 'int', 'tlength': 'int', 'evalue': 'float',
+            'db': 'string', 'name': 'string', 'color': 'string',
+            'annot': 'string', 'category': 'string', 'phrog/alan_profile': 'string',
+            'report_label': 'string', 'report_function': 'string', 'report_params': 'string'
+        }
 
-    values, indicies = [], columns_mapper.keys()
-    for key, variable_type in columns_mapper.items():
-        if variable_type == 'string': values.append('-')
-        else: values.append(0)
-
-    no_hit_row = pd.Series(values, index=indicies).to_frame().T
-    no_hit_row = pd.concat([no_hit_row]*n)
-    return no_hit_row
+    cols = list(columns_mapper.keys())
+    row = [('-' if columns_mapper[c] == 'string' else 0) for c in cols]
+    # Much faster than concat([series]*n)
+    return pd.DataFrame([row] * n, columns=cols)
 
 
 def get_unique_functions_frame(df, function_column='annot'):
-    """ for each function in data frame:
-    - get best hit [highest bitscore]
-    - for get highest qcov for a given function from all of the hits
-    - return frame of best hits for each function with highest qcov """
-    
-    # select best hits for each unique function (highest bitscore)
-    best_hits_df = df.loc[df.groupby(function_column)['bits'].idxmax()] \
-                                                             .sort_values('bits', ascending=False) \
-                                                             .copy()
-    
-    # get highest qcov for each unique function
-    best_qcov_df = df.loc[df.groupby(function_column)['qcov'] \
-                            .idxmax()][[function_column,'qcov']] \
-                            .copy()
-    
-    # best hits for each unique function & highest qcov for given function
-    final_df = best_hits_df.merge(best_qcov_df, on=function_column, how='left', suffixes=('_oryginal', '_best')) \
-                           .drop('qcov_oryginal', axis=1) \
-                           .rename(columns={'qcov_best': 'qcov'}) \
-                           .sort_values('bits', ascending=False)
-    
-    return final_df
+    """
+    For each function:
+      - pick best hit by max bits
+      - set qcov to max qcov observed for that function
+    Avoids extra groupby+merge.
+    """
+    if df.empty:
+        return df.copy()
+
+    df2 = df.copy()
+    df2['bits'] = pd.to_numeric(df2['bits'], errors='coerce').fillna(0.0)
+    df2['qcov'] = pd.to_numeric(df2['qcov'], errors='coerce').fillna(0.0)
+
+    idx = df2.groupby(function_column, sort=False)['bits'].idxmax()
+    best = df2.loc[idx].copy()
+
+    qcov_max = df2.groupby(function_column, sort=False)['qcov'].max()
+    best['qcov'] = best[function_column].map(qcov_max)
+
+    return best.sort_values('bits', ascending=False)

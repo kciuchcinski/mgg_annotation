@@ -3,17 +3,17 @@
 # ==========================================
 
 # Input directory containing phage fasta files
-PHAGES_DIR: test/data
+PHAGES_DIR: ../INPHARED
 
 # File extension for input files
-INPUT_EXTENSION: fasta
+INPUT_EXTENSION: fa
 
 # Output directory for all results
-OUTPUT_DIR: output_test
+OUTPUT_DIR: ../INPHARED_OUT
 
 # Database root directory (use absolute path)
 # NOTE: You can also set per-db overrides in the DATABASES section below
-DB_ROOT: /Users/karol/projects/mgg_annotation/databases
+DB_ROOT: /net/home/plgrid/plgkciuchcinski/MCB/team/kciuchcinski/NEW_MGG_DATABASES
 
 # Minimum length for phages (bp)
 PHAGE_MIN_LENGTH: 2000
@@ -71,6 +71,7 @@ CLUSTERING:
   SENSITIVITY: 7.5
 
 # --- Execution & Batching ---
-BATCH_SIZE: 20
+BATCH_SIZE: 400
 THREADS_PER_BATCH: 4
 SEARCH_TOOL: "hhblits_omp"
+ENRICH_CPUS: 4

@@ -19,9 +19,9 @@ params.DB_ROOT = params.DB_ROOT ?: "$baseDir/databases"
 params.GLIMMER_TRAIN = params.GLIMMER_TRAIN ?: "${params.DB_ROOT}/training-file_refseq.icm"
 
 params.HHSUITE            = params.HHSUITE ?: [:]
-params.HHSUITE.PHROGS     = params.HHSUITE.PHROGS ?: "${params.DB_ROOT}/phrogs_hhsuite_db/phrogs"
+params.HHSUITE.PHROGS     = params.HHSUITE.PHROGS ?: "${params.DB_ROOT}/PHROGS_v4/phrogs"
 params.HHSUITE.PFAM       = params.HHSUITE.PFAM   ?: "${params.DB_ROOT}/pfamA_32/pfam"
-params.HHSUITE.ECOD       = params.HHSUITE.ECOD   ?: "${params.DB_ROOT}/ECOD_F70/ECOD_F70_20200207"
+params.HHSUITE.ECOD       = params.HHSUITE.ECOD   ?: "${params.DB_ROOT}/ECOD_F70_20230309/ECOD_F70_20230309"
 params.HHSUITE.ALANDB     = params.HHSUITE.ALANDB ?: "${params.DB_ROOT}/AlanDavidson/profile-db/all_proteins"
 
 params.METADATA                          = params.METADATA ?: [:]
@@ -39,7 +39,7 @@ params.N_FUNCTIONS_PER_DB = params.N_FUNCTIONS_PER_DB ?: 2
 
 // Batch knobs
 params.chunk_size_a3m = params.chunk_size_a3m ?: params.BATCH_SIZE
-params.cpu_hhsuite    = params.cpu_hhsuite    ?: params.THREADS_PER_BATCH
+params.ENRICH_CPUS    = params.ENRICH_CPUS    ?: 8
 
 
 Channel
@@ -277,8 +277,8 @@ process BUILD_FFINDEX {
 
 // 9) Enrich via PHROGS
 process ENRICH_MSA_PHROGS {
+    cpus 4
     tag "enrich_${task.hash.substring(0,8)}"
-    cpus params.cpu_hhsuite
     input:
     tuple val(pc_ids), path(qidx), path(qdat)
     output:
@@ -292,7 +292,7 @@ process ENRICH_MSA_PHROGS {
     ln -s \$(realpath ${qidx}) enr/qdb.ffindex
     ln -s \$(realpath ${qdat}) enr/qdb.ffdata
     cd enr
-    ${params.SEARCH_TOOL} -i qdb -d ${params.HHSUITE.PHROGS} -oa3m enr_a3m -n 2 -cov 0 -p 0.95 -cpu ${task.cpus} > enrich.log 2>&1
+    ${params.SEARCH_TOOL} -i qdb -d ${params.HHSUITE.PHROGS} -oa3m enr_a3m -n 2 -cov 0 -p 0.95 -cpu ${params.ENRICH_CPUS} > enrich.log 2>&1
     """
 }
 
@@ -305,8 +305,8 @@ def dbMatrix = Channel.of(
 )
 
 process HHSUITE_SEARCH_BATCH {
+    cpus 4
     tag { "${dbname}_${task.hash.substring(0,8)}" }
-    cpus params.cpu_hhsuite
     input:
     tuple val(dbname), val(dbpath), val(niter), val(pc_ids), path(ffidx), path(ffdat)
     output:
@@ -320,29 +320,37 @@ process HHSUITE_SEARCH_BATCH {
     ln -s \$(realpath ${ffidx}) hhs/enr_a3m.ffindex
     ln -s \$(realpath ${ffdat}) hhs/enr_a3m.ffdata
     cd hhs
-    ${params.SEARCH_TOOL} -i enr_a3m -d ${dbpath} -o ${dbname}.hhr -cpu ${task.cpus} -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 -n ${niter} > ${dbname}.log 2>&1
+    ${params.SEARCH_TOOL} -i enr_a3m -d ${dbpath} -o ${dbname}.hhr -cpu ${params.THREADS_PER_BATCH} -mact 0.35 -p 50 -z 0 -v 0 -b 0 -qid 10 -cov 10 -E 1 -n ${niter} > ${dbname}.log 2>&1
     """
 }
 
-// 12) Unpack HHRs
 process UNPACK_HHR {
-    tag { "unpack_${dbname}_${task.hash.substring(0,8)}" }
+    // Tag with the unique ID so you can distinguish tasks in the log
+    tag { "unpack_${dbname}_${pc_ids.toString().md5().substring(0,8)}" }
+    cpus 4
     input:
     tuple val(dbname), val(pc_ids), path(ffidx), path(ffdat)
+
     output:
-    tuple val(dbname), path(dbname)
-    shell:
+    // 1. Define the output folder name dynamically using the same logic as the script
+    tuple val(dbname), path("${dbname}_${pc_ids.toString().md5().substring(0,8)}")
+
+    script:
+    // 2. Generate the unique ID safely in Groovy (avoids shell string limits)
+    def unique_id = pc_ids.toString().md5().substring(0,8)
+    def out_folder = "${dbname}_${unique_id}"
+    
     """
-    mkdir -p "${dbname}"
-    ffindex_unpack ${ffdat} ${ffidx} ${dbname}
+    mkdir -p "${out_folder}"
+    ffindex_unpack ${ffdat} ${ffidx} "${out_folder}"
     """
 }
 
 process GATHER_HHR {
     tag "gather_${dbname}"
-
+    cpus 64
     input:
-    tuple val(dbname), val(dirs)
+    tuple val(dbname), path(dirs)
 
     output:
     tuple val(dbname), path("${dbname}_hhr_files")
@@ -350,15 +358,22 @@ process GATHER_HHR {
     shell:
     """
     mkdir -p "${dbname}_hhr_files"
-    for d in ${dirs.join(' ')}; do
-        if [ -d "\$d" ]; then
-            find "\$d" -maxdepth 1 -type f -exec cp '{}' "${dbname}_hhr_files/" \\;
-        fi
-    done
+
+    # 1. Use -L to follow symlinks (Nextflow inputs are symlinks)
+    # 2. Use ! -name to prevent copying the output folder into itself
+    find -L . -maxdepth 1 -type d -name "${dbname}_*" ! -name "${dbname}_hhr_files" -print0 \
+      | while IFS= read -r -d '' d; do
+          # Copy files from the discovered directory into the destination
+          # cp -t is strictly for GNU cp; if using Alpine/Mac use: cp "\$f" "${dbname}_hhr_files/"
+          find -L "\$d" -maxdepth 1 -type f -exec cp -t "${dbname}_hhr_files" {} +
+        done
     """
 }
 
+
+
 process COLLECT_HITS {
+    cpus 160
     if( params.WRITE_SEARCH_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'search.tsv'
     }
@@ -391,6 +406,7 @@ process COLLECT_HITS {
 }
 
 process FILTER_HITS {
+    cpus 64
     publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'report.tsv'
 
     input:
@@ -420,6 +436,7 @@ process FILTER_HITS {
 }
 
 process BUILD_ANNOTATION {
+    cpus 64
     if( params.WRITE_ANNOTATION_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'annotation.tsv'
     }
@@ -448,6 +465,7 @@ process BUILD_ANNOTATION {
 
 // 14) GenBank export
 process GENBANK {
+    cpus 64
     publishDir "${params.OUTPUT_DIR}/genbanks", mode: 'copy', pattern: '*.gb'
 
     input:

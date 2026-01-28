@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""
+Build per-ORF annotation table (annotation.tsv) from filtered hits (report.tsv)
+"""
+
+import sys
+import os
+from pathlib import Path
+import argparse
+
+import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from annotation_utils import (
+    get_no_hit_frames,
+    report_phrogs,
+    report_alan,
+    report_pfam,
+    report_ecod,
+)
+
+# -----------------------------
+# Significance helper functions
+# -----------------------------
+
+def compute_significance_phrogs(row):
+    """
+    Significance for PHROGS hits, based on prob, qcov, tcov.
+
+    Rules:
+      - ***: prob >= 0.99 and qcov >= 0.6 and tcov >= 0.6
+      - ** : prob >= 0.95 and qcov >= 0.6 and tcov >= 0.6
+      - *  : prob >= 0.90 and qcov >= 0.3 and tcov >= 0.3
+      - ns : otherwise
+    """
+    prob = row.get("prob", 0.0)
+    qcov = row.get("qcov", 0.0)
+    tcov = row.get("tcov", 0.0)
+
+    if prob >= 0.99 and qcov >= 0.6 and tcov >= 0.6:
+        return "***"
+    if prob >= 0.95 and qcov >= 0.6 and tcov >= 0.6:
+        return "**"
+    if prob >= 0.90 and qcov >= 0.3 and tcov >= 0.3:
+        return "*"
+    return "ns"
+
+
+def compute_significance_domain(row):
+    """
+    Significance for domain hits (ECOD, PFAM, ALANDB), based on prob, tcov.
+
+    Rules:
+      - ***: prob >= 0.99 and tcov >= 0.3
+      - ** : prob >= 0.95 and tcov >= 0.3
+      - *  : prob >= 0.90 and tcov >= 0.1
+      - ns : otherwise
+    """
+    prob = row.get("prob", 0.0)
+    tcov = row.get("tcov", 0.0)
+
+    if prob >= 0.99 and tcov >= 0.3:
+        return "***"
+    if prob >= 0.95 and tcov >= 0.3:
+        return "**"
+    if prob >= 0.90 and tcov >= 0.1:
+        return "*"
+    return "ns"
+
+
+def add_significance_column(df):
+    """
+    Given a per-hit DataFrame with a 'db' column (PHROGS, ALANDB, PFAM, ECOD),
+    compute a 'report_significance' column according to the rules above.
+    """
+    if df.empty:
+        df["report_significance"] = []
+        return df
+
+    def _row_significance(row):
+        db = row.get("db", "")
+        if db == "PHROGS":
+            return compute_significance_phrogs(row)
+        elif db in {"ALANDB", "PFAM", "ECOD"}:
+            return compute_significance_domain(row)
+        else:
+            # Default to domain rules for any other DBs, or 'ns'
+            return compute_significance_domain(row)
+
+    df["report_significance"] = df.apply(_row_significance, axis=1)
+    return df
+
+def report_db(dbid, df, nfunc2report, verbose=False):
+    """Unified wrapper around DB-specific report_* functions."""
+    if dbid == "PHROGS":
+        return report_phrogs(
+            df,
+            max_evalue=10 ** -3,
+            nfunc2report=nfunc2report,
+            verbose=verbose,
+        )
+    elif dbid == "ALANDB":
+        return report_alan(
+            df,
+            min_prob=0.95,
+            nfunc2report=nfunc2report,
+            verbose=verbose,
+        )
+    elif dbid == "PFAM":
+        return report_pfam(
+            df,
+            nfunc2report=nfunc2report,
+            verbose=verbose,
+        )
+    elif dbid == "ECOD":
+        return report_ecod(
+            df,
+            nfunc2report=nfunc2report,
+            verbose=verbose,
+        )
+
+
+# -----------------------------
+# Main script
+# -----------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Build ORF-level annotation table from filtered hits"
+    )
+    parser.add_argument("--confident", required=True, help="Path to confident_orfs.csv")
+    parser.add_argument("--pcs2proteins", required=True, help="Path to PCs2proteins.tsv")
+    parser.add_argument("--nfunc2report", type=int, default=2, help="Number of functions to report per DB")
+    parser.add_argument("--report", required=True, help="Filtered per-hit table (report.tsv)")
+    parser.add_argument(
+        "--write-annotation",
+        required=True,
+        help="Boolean flag: write annotation.tsv or not",
+    )
+    parser.add_argument("--out-annotation-full", required=True,
+                        help="Full annotation table (with sequences)")
+    parser.add_argument("--out-annotation-public", required=True,
+                        help="Public annotation table (no sequences)")
+
+    args = parser.parse_args()
+    write_annotation = str(args.write_annotation).lower() in {"1", "true", "yes", "y"}
+
+    print("Loading filtered hits (report.tsv)... ", end="", flush=True)
+    df = pd.read_csv(args.report, sep="\t")
+    print("Done!")
+
+    # Add significance for each hit row according to db-specific rules
+    print("Computing per-hit significance... ", end="",flush=True)
+    df = add_significance_column(df)
+    print("Done!")
+
+    if df.empty:
+        print("report.tsv is empty; no hits found.")
+        best_hits_df = pd.DataFrame(
+            columns=[
+                "query",
+                "target",
+                "prob",
+                "qcov",
+                "tcov",
+                "bits",
+                "evalue",
+                "report_label",
+                "report_function",
+                "report_params",
+                "report_significance",
+            ]
+        )
+    else:
+        print("Selecting best hits per PC and DB... ", end="", flush=True)
+        best_hits_dfs = []
+        for pcid, pc in df.groupby("query"):
+            # Default "no hit" frames
+            phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b = get_no_hit_frames(pcid, args.nfunc2report)
+
+            for dbid, db in pc.groupby("db"):
+                if db.empty:
+                    continue
+                db_best = report_db(dbid, db, nfunc2report=args.nfunc2report, verbose=False)
+                if dbid == "PHROGS":
+                    phrogs_df_b = db_best
+                elif dbid == "ALANDB":
+                    alan_df_b = db_best
+                elif dbid == "PFAM":
+                    pfam_df_b = db_best
+                elif dbid == "ECOD":
+                    ecod_df_b = db_best
+
+            best_hits_dfs.extend([phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b])
+
+        best_hits_df = pd.concat(best_hits_dfs).reset_index(drop=True)
+        print("Done!")
+
+    if best_hits_df.empty:
+        print("No best hits; annotation table will contain only ORFs and IDs.")
+
+    # Ensure report_significance exists; if not (e.g. from get_no_hit_frames), fill with '-'
+    if "report_significance" not in best_hits_df.columns:
+        best_hits_df["report_significance"] = "-"
+    best_hits_df["report_significance"] = best_hits_df["report_significance"].fillna("ns")
+
+    # Simplify to the columns we need
+    print("Reshaping best hits table... ", end="", flush=True)
+    best_hits_df = best_hits_df[
+        [
+            "query",
+            "target",
+            "prob",
+            "qcov",
+            "tcov",
+            "bits",
+            "evalue",
+            "report_label",
+            "report_function",
+            "report_params",
+            "report_significance",
+        ]
+    ]
+
+    # Build db_function / db_params / db_function_sig labels for pivoting
+    best_hits_df["db_function"] = best_hits_df.apply(
+        lambda row: row["report_label"] + "_function", axis=1
+    )
+    # Build column names for bits and evalue
+    best_hits_df["db_bits"] = best_hits_df.apply(
+        lambda row: row["report_label"] + "_bits", axis=1
+    )
+    best_hits_df["db_evalue"] = best_hits_df.apply(
+        lambda row: row["report_label"] + "_evalue", axis=1
+    )
+    best_hits_df["db_function_sig"] = best_hits_df.apply(
+        lambda row: row["report_label"] + "_function_sig", axis=1
+    )
+
+    # Wide tables: function, params, significance
+    function_df = best_hits_df.pivot(
+        columns="db_function", index="query", values="report_function"
+    ).copy()
+    # Pivot bits and evalue separately
+    bits_df = best_hits_df.pivot(
+        columns="db_bits", index="query", values="bits"
+    ).copy()
+    evalue_df = best_hits_df.pivot(
+        columns="db_evalue", index="query", values="evalue"
+    ).copy()
+    sig_df = best_hits_df.pivot(
+        columns="db_function_sig", index="query", values="report_significance"
+    ).copy()
+
+    function_df.index.name = "PC"
+    bits_df.index.name = "PC"
+    evalue_df.index.name = "PC"
+    sig_df.index.name = "PC"
+
+    # Merge all PC-level info
+    report_df = function_df.merge(sig_df, on="PC", how="left")
+    report_df = report_df.merge(bits_df, on="PC", how="left")
+    report_df = report_df.merge(evalue_df, on="PC", how="left")
+
+    print("Done!")
+
+    # Map PC-level functions back to proteins
+    print("Loading ORF and PC tables... ", end="", flush=True)
+    orfs_df = pd.read_csv(args.confident)
+    pcs2proteins_df = pd.read_csv(args.pcs2proteins, sep="\t", usecols=[0, 1])
+    print("Done!")
+
+    print("Merging ORFs with PCs and functions... ", end="", flush=True)
+    orfs_df = orfs_df.merge(pcs2proteins_df, on="proteinID", how="left")
+    orfs_df = orfs_df.merge(report_df, on="PC", how="left")
+    print("Done!")
+
+    # Identify dynamic columns
+    func_cols   = sorted(c for c in orfs_df.columns if c.endswith("_function"))
+    sig_cols    = sorted(c for c in orfs_df.columns if c.endswith("_function_sig"))
+    bits_cols   = sorted(c for c in orfs_df.columns if c.endswith("_bits"))
+    evalue_cols = sorted(c for c in orfs_df.columns if c.endswith("_evalue"))
+
+    fixed_prefix = ["proteinID", "PC", "protein_len"]
+    fixed_suffix = [
+        "protein", "orf", "start", "stop", "strand",
+        "contigID", "orf_len", "codon_stop", "source",
+    ]
+
+    cols = fixed_prefix + func_cols + sig_cols + fixed_suffix + bits_cols + evalue_cols
+    cols_present = [c for c in cols if c in orfs_df.columns]
+    orfs_df = orfs_df[cols_present]
+    orfs_df = orfs_df.fillna("-")
+
+    # Always write full annotation for downstream use (e.g. GENBANK)
+    print(f"Writing full annotation to {args.out_annotation_full} ... ", end="", flush=True)
+    Path(args.out_annotation_full).parent.mkdir(parents=True, exist_ok=True)
+    orfs_df.to_csv(args.out_annotation_full, sep="\t", index=False)
+    print("Done!")
+
+    # Identify evalue columns
+    evalue_cols = [c for c in orfs_df.columns if c.endswith("_evalue")]
+
+    # Format evalues in scientific notation
+    for col in evalue_cols:
+        orfs_df[col] = orfs_df[col].apply(
+            lambda x: f'{float(x):.2e}' if str(x) != '-' and float(x) != 0 else ('0' if str(x) != '-' else '-')
+        )
+
+    # Build public table (without sequences)
+    seq_cols = [c for c in ["protein", "orf"] if c in orfs_df.columns]
+    public_df = orfs_df.drop(columns=seq_cols)
+
+    if write_annotation:
+        print(f"Writing public annotation to {args.out_annotation_public} ... ", end="", flush=True)
+        Path(args.out_annotation_public).parent.mkdir(parents=True, exist_ok=True)
+        public_df.to_csv(args.out_annotation_public, sep="\t", index=False)
+        print("Done!")
+    else:
+        print("WRITE_ANNOTATION_TABLE is false; not writing annotation.tsv (public table).")
+
+
+if __name__ == "__main__":
+    main()

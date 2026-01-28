@@ -1,70 +1,109 @@
 #!/usr/bin/env python3
 """
 Collect raw HHsuite hits and metadata into a single per-hit table (search.tsv).
+Optimized for high-throughput parallel processing.
 """
 
+from pathlib import Path
 import sys
 import os
-from pathlib import Path
 import argparse
-
 import pandas as pd
 import numpy as np
 from csb.bio.io import HHOutputParser
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from itertools import islice
 
+# Configuration for high-performance execution
+MAX_WORKERS = 160
+BATCH_SIZE = 2000  # Number of files per worker task
 
 def get_phrog(row):
     """ get phrog cluster """
     if 'phrog_' in str(row['target']):
-        return int(row['target'].split('_')[-1])
+        try:
+            return int(row['target'].split('_')[-1])
+        except (ValueError, IndexError):
+            return 0
     else:
         return 0
 
+def list_files_fast(directory, extension=".a3m"):
+    """
+    Generator that yields file paths significantly faster than glob
+    by using os.scandir (avoids building massive lists in RAM).
+    """
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                if entry.is_file() and entry.name.endswith(extension):
+                    yield entry.path
+    except OSError as e:
+        print(f"Warning: Could not access directory {directory}: {e}", file=sys.stderr)
 
-def get_hits(tables, dbname='UNKNOWN'):
-    """Parse .hhr files into a per-hit DataFrame."""
+def batched(iterable, n):
+    """Batch data into lists of length n. The last batch may be shorter."""
+    it = iter(iterable)
+    while True:
+        batch = list(islice(it, n))
+        if not batch:
+            break
+        yield batch
+
+def process_batch(file_paths, dbname):
+    """
+    Worker function: Parses a batch of files and returns a DataFrame.
+    """
+    # parser object needs to be created inside the worker process
+    parser = HHOutputParser()
+    
     colnames = [
         'query', 'target', 'qstart', 'qend', 'qlength',
         'tstart', 'tend', 'tlength', 'ident',
         'bits', 'evalue', 'prob', 'pvalue', 'name'
     ]
-
-    rows, corrupted, parser = [], [], HHOutputParser()
-    for table in tables:
+    
+    rows = []
+    
+    for fpath in file_paths:
         try:
-            parsed_table = parser.parse_file(table)
+            # We catch all exceptions to prevent one bad file from killing the worker
+            parsed_table = parser.parse_file(fpath)
+            qname = parsed_table.query_name
+            
+            for hit in parsed_table:
+                rows.append([
+                    qname,
+                    hit.id,
+                    hit.qstart,
+                    hit.qend,
+                    hit.qlength,
+                    hit.start,
+                    hit.end,
+                    hit.slength,
+                    round(int(hit.identity) / 100, 2),
+                    hit.score,
+                    hit.evalue,
+                    hit.probability,
+                    hit.pvalue,
+                    hit.name,
+                ])
         except Exception:
-            corrupted.append(table)
+            # Silently skip corrupted files in high-throughput mode 
+            # or print to stderr if critical debugging is needed
             continue
 
-        qname = parsed_table.query_name
-        for hit in parsed_table:
-            hit_values = [
-                qname,
-                hit.id,
-                hit.qstart,
-                hit.qend,
-                hit.qlength,
-                hit.start,
-                hit.end,
-                hit.slength,
-                round(int(hit.identity) / 100, 2),
-                hit.score,
-                hit.evalue,
-                hit.probability,
-                hit.pvalue,
-                hit.name,
-            ]
-            rows.append(hit_values)
+    if not rows:
+        return dbname, None
 
+    # Create DataFrame in the worker to distribute CPU load of creation/calc
     df = pd.DataFrame(rows, columns=colnames)
-    if df.empty:
-        df['db'] = dbname
-        return df
-
+    
+    # Vectorized calculations
     df['prob'] = np.round(df['prob'], 3)
-    df['qcov'] = np.round(np.abs(df['qstart'] - 1 - df['qend']) / df['qlength'], 2)
-    df['tcov'] = np.round(np.abs(df['tstart'] - 1 - df['tend']) / df['tlength'], 2)
+    # Avoid division by zero
+    df['qcov'] = np.round(np.abs(df['qstart'] - 1 - df['qend']) / df['qlength'].replace(0, 1), 2)
+    df['tcov'] = np.round(np.abs(df['tstart'] - 1 - df['tend']) / df['tlength'].replace(0, 1), 2)
     df['db'] = dbname
 
     colfinal = [
@@ -72,14 +111,14 @@ def get_hits(tables, dbname='UNKNOWN'):
         'bits', 'qstart', 'qend', 'qlength', 'tstart', 'tend', 'tlength',
         'evalue', 'db', 'name'
     ]
-    return df[colfinal]
-
+    
+    return dbname, df[colfinal]
 
 def main():
     parser = argparse.ArgumentParser(
         description="Collect raw HHsuite hits from multiple databases into search.tsv"
     )
-    parser.add_argument("--pcs2proteins", required=True, help="PCs2proteins.tsv (not used here, kept for interface consistency)")
+    parser.add_argument("--pcs2proteins", required=True, help="PCs2proteins.tsv")
     parser.add_argument("--phrogs-dir", required=True, help="Directory with PHROGS .a3m files")
     parser.add_argument("--alan-dir", required=True, help="Directory with ALANDB .a3m files")
     parser.add_argument("--pfam-dir", required=True, help="Directory with PFAM .a3m files")
@@ -91,26 +130,79 @@ def main():
 
     args = parser.parse_args()
 
-    write_search = str(args.write_search).lower() in {"1", "true", "yes", "y"}
+    # Define the databases to process
+    # Format: (directory, db_name)
+    db_configs = [
+        (args.phrogs_dir, "PHROGS"),
+        (args.alan_dir, "ALANDB"),
+        (args.pfam_dir, "PFAM"),
+        (args.ecod_dir, "ECOD")
+    ]
 
-    print("Loading a3m file lists... ", end="")
-    phrogs_tables = list(Path(args.phrogs_dir).glob("*.a3m"))
-    alan_tables = list(Path(args.alan_dir).glob("*.a3m"))
-    pfam_tables = list(Path(args.pfam_dir).glob("*.a3m"))
-    ecod_tables = list(Path(args.ecod_dir).glob("*.a3m"))
-    print("Done!")
+    # Container for results
+    results_map = {
+        "PHROGS": [],
+        "ALANDB": [],
+        "PFAM": [],
+        "ECOD": []
+    }
 
-    print("Parsing A3M hits... ", end="")
-    phrogs_df = get_hits(phrogs_tables, dbname="PHROGS")
-    alan_df = get_hits(alan_tables, dbname="ALANDB")
-    pfam_df = get_hits(pfam_tables, dbname="PFAM")
-    ecod_df = get_hits(ecod_tables, dbname="ECOD")
-    print("Done!")
+    print(f"Starting parallel processing with {MAX_WORKERS} CPUs...", flush=True)
+    
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
+        
+        # Submit tasks
+        for db_dir, db_name in db_configs:
+            print(f"Scanning directory for {db_name}...", end=" ", flush=True)
+            # Use generator to avoid loading 1M paths into memory at once
+            file_gen = list_files_fast(db_dir)
+            
+            count = 0
+            for chunk in batched(file_gen, BATCH_SIZE):
+                futures.append(executor.submit(process_batch, chunk, db_name))
+                count += 1
+            print(f"Submitted {count} batches.", flush=True)
 
-    # Load PHROGS and ALAN metadata and attach basic fields (optional at this stage)
-    print("Loading PHROGS & ALAN metadata... ", end="")
-    phrogs_annot_df = pd.read_csv(args.phrogs_table, sep="\t")
-    # mgg_phrogs_table usage removed; use phrogs_table as is
+        print("Waiting for tasks to complete...", flush=True)
+        
+        # Process results as they complete
+        completed_count = 0
+        total_futures = len(futures)
+        
+        for future in as_completed(futures):
+            try:
+                dbname, df_chunk = future.result()
+                if df_chunk is not None and not df_chunk.empty:
+                    results_map[dbname].append(df_chunk)
+            except Exception as e:
+                print(f"Worker task failed: {e}", file=sys.stderr)
+            
+            completed_count += 1
+            if completed_count % 500 == 0:
+                print(f"Progress: {completed_count}/{total_futures} batches processed...", flush=True)
+
+    print("Aggregating results...", flush=True)
+    
+    # Helper to concat or create empty
+    def safe_concat(df_list, db_name):
+        if not df_list:
+            return pd.DataFrame(columns=[
+                'query', 'target', 'prob', 'pvalue', 'ident', 'qcov', 'tcov',
+                'bits', 'qstart', 'qend', 'qlength', 'tstart', 'tend', 'tlength',
+                'evalue', 'db', 'name'
+            ])
+        # Concatenating once is much faster than incremental append
+        return pd.concat(df_list, axis=0, ignore_index=True)
+
+    phrogs_df = safe_concat(results_map["PHROGS"], "PHROGS")
+    alan_df = safe_concat(results_map["ALANDB"], "ALANDB")
+    pfam_df = safe_concat(results_map["PFAM"], "PFAM")
+    ecod_df = safe_concat(results_map["ECOD"], "ECOD")
+
+    # Load Metadata (same logic as original)
+    print("Loading PHROGS & ALAN metadata...", flush=True)
+    phrogs_annot_df = pd.read_csv(args.phrogs_table, sep="\\t")
     phrogs_annot_df = phrogs_annot_df[
         ["phrog", "color", "annot", "category"]
     ].fillna("unknown function")
@@ -124,23 +216,15 @@ def main():
         }
     )
     alan_drop_cols = [
-        c
-        for c in [
-            "abbrev",
-            "hmm.name",
-            "family.name",
-            "family.name.base",
-            "where.it.occurs",
-            "is.custom",
-            "custom.hmm.exists",
-        ]
+        c for c in ["abbrev", "hmm.name", "family.name", "family.name.base",
+                    "where.it.occurs", "is.custom", "custom.hmm.exists"]
         if c in alan_annot_df.columns
     ]
     alan_annot_df = alan_annot_df.drop(columns=alan_drop_cols, errors="ignore")
-    print("Done!")
+    print("Done!", flush=True)
 
-    # Attach metadata but do not do best-hit selection here
-    print("Attaching PHROGS and ALAN metadata... ", end="")
+    # Attach metadata
+    print("Attaching metadata...", flush=True)
     if not phrogs_df.empty:
         phrogs_df["phrog"] = phrogs_df.apply(get_phrog, axis=1)
         phrogs_df = phrogs_df.merge(phrogs_annot_df, on="phrog", how="left")
@@ -148,31 +232,36 @@ def main():
     if not alan_df.empty:
         alan_df["alan_profile"] = alan_df["target"]
         alan_df = alan_df.merge(alan_annot_df, on="alan_profile", how="left")
-    print("Done!")
+    print("Done!", flush=True)
 
-    print("Combining all hits... ", end="")
+    print("Combining all hits...", flush=True)
     df = pd.concat([phrogs_df, alan_df, pfam_df, ecod_df], axis=0, ignore_index=True)
 
     if df.empty:
-        print("No hits found, writing empty search.tsv.")
+        print("No hits found, writing empty search.tsv.", flush=True)
         Path(args.out_search).parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(args.out_search, sep="\t", index=False)
+        df.to_csv(args.out_search, sep="\\t", index=False)
         return
 
+    # Post-processing
     df[["phrog", "alan_profile"]] = df.get(
         ["phrog", "alan_profile"], pd.DataFrame(columns=["phrog", "alan_profile"])
     ).fillna("0")
     df["phrog"] = df["phrog"].astype(int, errors="ignore")
 
-    df["tmp"] = df["query"].str.strip("PC").astype(int, errors="ignore")
-    df = df.sort_values("tmp", ascending=True).drop(columns=["tmp"])
+    # Sorting
+    try:
+        df["tmp"] = df["query"].str.strip("PC").astype(int, errors="ignore")
+        df = df.sort_values("tmp", ascending=True).drop(columns=["tmp"])
+    except Exception:
+        # Fallback if query format is unexpected
+        pass
 
-    # Always write search.tsv for downstream processes
-    print(f"Writing search table to {args.out_search} ... ", end="")
+    print(f"Writing search table to {args.out_search} ...", end=" ", flush=True)
     Path(args.out_search).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.out_search, sep="\t", index=False)
-    print("Done!")
-
+    print("Done!", flush=True)
 
 if __name__ == "__main__":
     main()
+

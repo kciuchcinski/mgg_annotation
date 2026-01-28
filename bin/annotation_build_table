@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 Build per-ORF annotation table (annotation.tsv) from filtered hits (report.tsv)
+Optimized for large report.tsv (vectorized ops + multiprocessing by query blocks).
 """
 
 import sys
 import os
 from pathlib import Path
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,305 +23,272 @@ from annotation_utils import (
     report_ecod,
 )
 
-# -----------------------------
-# Significance helper functions
-# -----------------------------
+# Hard-coded for now (as requested)
+MAX_WORKERS = 160
 
-def compute_significance_phrogs(row):
+# Tune this: larger blocks reduce overhead, smaller blocks reduce peak RAM per worker
+ROWS_PER_BLOCK = 250_000
+
+
+def add_significance_column_fast(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Significance for PHROGS hits, based on prob, qcov, tcov.
-
-    Rules:
-      - ***: prob >= 0.99 and qcov >= 0.6 and tcov >= 0.6
-      - ** : prob >= 0.95 and qcov >= 0.6 and tcov >= 0.6
-      - *  : prob >= 0.90 and qcov >= 0.3 and tcov >= 0.3
-      - ns : otherwise
-    """
-    prob = row.get("prob", 0.0)
-    qcov = row.get("qcov", 0.0)
-    tcov = row.get("tcov", 0.0)
-
-    if prob >= 0.99 and qcov >= 0.6 and tcov >= 0.6:
-        return "***"
-    if prob >= 0.95 and qcov >= 0.6 and tcov >= 0.6:
-        return "**"
-    if prob >= 0.90 and qcov >= 0.3 and tcov >= 0.3:
-        return "*"
-    return "ns"
-
-
-def compute_significance_domain(row):
-    """
-    Significance for domain hits (ECOD, PFAM, ALANDB), based on prob, tcov.
-
-    Rules:
-      - ***: prob >= 0.99 and tcov >= 0.3
-      - ** : prob >= 0.95 and tcov >= 0.3
-      - *  : prob >= 0.90 and tcov >= 0.1
-      - ns : otherwise
-    """
-    prob = row.get("prob", 0.0)
-    tcov = row.get("tcov", 0.0)
-
-    if prob >= 0.99 and tcov >= 0.3:
-        return "***"
-    if prob >= 0.95 and tcov >= 0.3:
-        return "**"
-    if prob >= 0.90 and tcov >= 0.1:
-        return "*"
-    return "ns"
-
-
-def add_significance_column(df):
-    """
-    Given a per-hit DataFrame with a 'db' column (PHROGS, ALANDB, PFAM, ECOD),
-    compute a 'report_significance' column according to the rules above.
+    Vectorized significance computation; replaces row-wise apply().
+    Expects columns: db, prob, qcov, tcov.
     """
     if df.empty:
         df["report_significance"] = []
         return df
 
-    def _row_significance(row):
-        db = row.get("db", "")
-        if db == "PHROGS":
-            return compute_significance_phrogs(row)
-        elif db in {"ALANDB", "PFAM", "ECOD"}:
-            return compute_significance_domain(row)
-        else:
-            # Default to domain rules for any other DBs, or 'ns'
-            return compute_significance_domain(row)
+    db = df["db"].astype("string")
+    prob = pd.to_numeric(df.get("prob", 0.0), errors="coerce").fillna(0.0).to_numpy()
+    qcov = pd.to_numeric(df.get("qcov", 0.0), errors="coerce").fillna(0.0).to_numpy()
+    tcov = pd.to_numeric(df.get("tcov", 0.0), errors="coerce").fillna(0.0).to_numpy()
 
-    df["report_significance"] = df.apply(_row_significance, axis=1)
+    is_phrogs = (db == "PHROGS").to_numpy()
+    is_domain = np.isin(db.to_numpy(), np.array(["ALANDB", "PFAM", "ECOD"], dtype=object))
+
+    sig = np.full(len(df), "ns", dtype=object)
+
+    # Domain rules
+    d3 = is_domain & (prob >= 0.99) & (tcov >= 0.3)
+    d2 = is_domain & (prob >= 0.95) & (tcov >= 0.3)
+    d1 = is_domain & (prob >= 0.90) & (tcov >= 0.1)
+
+    sig[d1] = "*"
+    sig[d2] = "**"
+    sig[d3] = "***"
+
+    # PHROGS rules (override domain)
+    p3 = is_phrogs & (prob >= 0.99) & (qcov >= 0.6) & (tcov >= 0.6)
+    p2 = is_phrogs & (prob >= 0.95) & (qcov >= 0.6) & (tcov >= 0.6)
+    p1 = is_phrogs & (prob >= 0.90) & (qcov >= 0.3) & (tcov >= 0.3)
+
+    sig[p1] = "*"
+    sig[p2] = "**"
+    sig[p3] = "***"
+
+    df = df.copy()
+    df["report_significance"] = sig
     return df
 
+
 def report_db(dbid, df, nfunc2report, verbose=False):
-    """Unified wrapper around DB-specific report_* functions."""
     if dbid == "PHROGS":
-        return report_phrogs(
-            df,
-            max_evalue=10 ** -3,
-            nfunc2report=nfunc2report,
-            verbose=verbose,
-        )
+        return report_phrogs(df, max_evalue=10**-3, nfunc2report=nfunc2report, verbose=verbose)
     elif dbid == "ALANDB":
-        return report_alan(
-            df,
-            min_prob=0.95,
-            nfunc2report=nfunc2report,
-            verbose=verbose,
-        )
+        return report_alan(df, min_prob=0.95, nfunc2report=nfunc2report, verbose=verbose)
     elif dbid == "PFAM":
-        return report_pfam(
-            df,
-            nfunc2report=nfunc2report,
-            verbose=verbose,
-        )
+        return report_pfam(df, nfunc2report=nfunc2report, verbose=verbose)
     elif dbid == "ECOD":
-        return report_ecod(
-            df,
-            nfunc2report=nfunc2report,
-            verbose=verbose,
-        )
+        return report_ecod(df, nfunc2report=nfunc2report, verbose=verbose)
+    else:
+        # Unknown db -> return nothing (keeps no-hit frames)
+        return None
 
 
-# -----------------------------
-# Main script
-# -----------------------------
+def split_into_blocks_by_query(df: pd.DataFrame, rows_per_block: int):
+    """
+    Split df into blocks that contain whole 'query' groups, aiming for ~rows_per_block rows per block.
+    This keeps pickling overhead manageable while still parallelizing well.
+    """
+    if df.empty:
+        return []
+
+    # group sizes per query
+    sizes = df.groupby("query", sort=False, observed=True).size()
+    block_id = (sizes.cumsum() // rows_per_block).astype("int32")  # Series indexed by query
+
+    # map query -> block
+    tmp = df["query"].map(block_id).astype("int32")
+    df2 = df.copy()
+    df2["_block"] = tmp
+
+    blocks = []
+    for _, bdf in df2.groupby("_block", sort=False, observed=True):
+        blocks.append(bdf.drop(columns=["_block"]))
+    return blocks
+
+
+def process_block(block_df: pd.DataFrame, nfunc2report: int) -> pd.DataFrame:
+    """
+    Worker: compute best hits for all PCs in this block.
+    Returns a concatenated best-hits dataframe.
+    """
+    out = []
+
+    # Keep groupby overhead smaller
+    for pcid, pc in block_df.groupby("query", sort=False, observed=True):
+        phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b = get_no_hit_frames(pcid, nfunc2report)
+
+        for dbid, db in pc.groupby("db", sort=False, observed=True):
+            if db.empty:
+                continue
+            db_best = report_db(dbid, db, nfunc2report=nfunc2report, verbose=False)
+            if db_best is None or db_best.empty:
+                continue
+
+            if dbid == "PHROGS":
+                phrogs_df_b = db_best
+            elif dbid == "ALANDB":
+                alan_df_b = db_best
+            elif dbid == "PFAM":
+                pfam_df_b = db_best
+            elif dbid == "ECOD":
+                ecod_df_b = db_best
+
+        out.extend([phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b])
+
+    if not out:
+        return pd.DataFrame()
+
+    return pd.concat(out, ignore_index=True)
+
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Build ORF-level annotation table from filtered hits"
-    )
+    parser = argparse.ArgumentParser(description="Build ORF-level annotation table from filtered hits")
     parser.add_argument("--confident", required=True, help="Path to confident_orfs.csv")
     parser.add_argument("--pcs2proteins", required=True, help="Path to PCs2proteins.tsv")
     parser.add_argument("--nfunc2report", type=int, default=2, help="Number of functions to report per DB")
     parser.add_argument("--report", required=True, help="Filtered per-hit table (report.tsv)")
-    parser.add_argument(
-        "--write-annotation",
-        required=True,
-        help="Boolean flag: write annotation.tsv or not",
-    )
-    parser.add_argument("--out-annotation-full", required=True,
-                        help="Full annotation table (with sequences)")
-    parser.add_argument("--out-annotation-public", required=True,
-                        help="Public annotation table (no sequences)")
-
+    parser.add_argument("--write-annotation", required=True, help="Boolean flag: write annotation.tsv or not")
+    parser.add_argument("--out-annotation-full", required=True, help="Full annotation table (with sequences)")
+    parser.add_argument("--out-annotation-public", required=True, help="Public annotation table (no sequences)")
     args = parser.parse_args()
+
     write_annotation = str(args.write_annotation).lower() in {"1", "true", "yes", "y"}
 
-    print("Loading filtered hits (report.tsv)... ", end="")
-    df = pd.read_csv(args.report, sep="\t")
-    print("Done!")
+    print("Loading filtered hits (report.tsv)... ", end="", flush=True)
+    df = pd.read_csv(args.report, sep="\t", low_memory=False)
+    print("Done!", flush=True)
 
-    # Add significance for each hit row according to db-specific rules
-    print("Computing per-hit significance... ", end="")
-    df = add_significance_column(df)
-    print("Done!")
+    print("Computing per-hit significance... ", end="", flush=True)
+    df = add_significance_column_fast(df)
+    print("Done!", flush=True)
 
     if df.empty:
-        print("report.tsv is empty; no hits found.")
+        print("report.tsv is empty; no hits found.", flush=True)
         best_hits_df = pd.DataFrame(
             columns=[
-                "query",
-                "target",
-                "prob",
-                "qcov",
-                "tcov",
-                "bits",
-                "evalue",
-                "report_label",
-                "report_function",
-                "report_params",
-                "report_significance",
+                "query", "target", "prob", "qcov", "tcov", "bits", "evalue",
+                "report_label", "report_function", "report_params", "report_significance",
             ]
         )
     else:
-        print("Selecting best hits per PC and DB... ", end="")
-        best_hits_dfs = []
-        for pcid, pc in df.groupby("query"):
-            # Default "no hit" frames
-            phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b = get_no_hit_frames(pcid, args.nfunc2report)
+        # These dtypes help groupby performance a bit on large frames
+        if "db" in df.columns:
+            df["db"] = df["db"].astype("category")
+        if "query" in df.columns:
+            df["query"] = df["query"].astype("string")
 
-            for dbid, db in pc.groupby("db"):
-                if db.empty:
-                    continue
-                db_best = report_db(dbid, db, nfunc2report=args.nfunc2report, verbose=False)
-                if dbid == "PHROGS":
-                    phrogs_df_b = db_best
-                elif dbid == "ALANDB":
-                    alan_df_b = db_best
-                elif dbid == "PFAM":
-                    pfam_df_b = db_best
-                elif dbid == "ECOD":
-                    ecod_df_b = db_best
+        print("Selecting best hits per PC and DB (parallel)... ", end="", flush=True)
+        # Sorting improves locality + makes group splitting more predictable
+        df = df.sort_values(["query", "db"], kind="mergesort")
 
-            best_hits_dfs.extend([phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b])
+        blocks = split_into_blocks_by_query(df, rows_per_block=ROWS_PER_BLOCK)
 
-        best_hits_df = pd.concat(best_hits_dfs).reset_index(drop=True)
-        print("Done!")
+        best_parts = []
+        with ProcessPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            futs = [ex.submit(process_block, b, args.nfunc2report) for b in blocks]
+            for i, fut in enumerate(as_completed(futs), start=1):
+                part = fut.result()
+                if part is not None and not part.empty:
+                    best_parts.append(part)
+                if i % 10 == 0:
+                    print(f"{i}/{len(futs)} blocks...", end=" ", flush=True)
+
+        best_hits_df = pd.concat(best_parts, ignore_index=True) if best_parts else pd.DataFrame()
+        print("Done!", flush=True)
 
     if best_hits_df.empty:
-        print("No best hits; annotation table will contain only ORFs and IDs.")
+        print("No best hits; annotation table will contain only ORFs and IDs.", flush=True)
 
-    # Ensure report_significance exists; if not (e.g. from get_no_hit_frames), fill with '-'
     if "report_significance" not in best_hits_df.columns:
         best_hits_df["report_significance"] = "-"
     best_hits_df["report_significance"] = best_hits_df["report_significance"].fillna("ns")
 
-    # Simplify to the columns we need
-    print("Reshaping best hits table... ", end="")
-    best_hits_df = best_hits_df[
-        [
-            "query",
-            "target",
-            "prob",
-            "qcov",
-            "tcov",
-            "bits",
-            "evalue",
-            "report_label",
-            "report_function",
-            "report_params",
-            "report_significance",
-        ]
+    # Keep only columns used downstream (same as your original)
+    need_cols = [
+        "query", "target", "prob", "qcov", "tcov", "bits", "evalue",
+        "report_label", "report_function", "report_params", "report_significance",
     ]
+    best_hits_df = best_hits_df[[c for c in need_cols if c in best_hits_df.columns]].copy()
 
-    # Build db_function / db_params / db_function_sig labels for pivoting
-    best_hits_df["db_function"] = best_hits_df.apply(
-        lambda row: row["report_label"] + "_function", axis=1
-    )
-    # Build column names for bits and evalue
-    best_hits_df["db_bits"] = best_hits_df.apply(
-        lambda row: row["report_label"] + "_bits", axis=1
-    )
-    best_hits_df["db_evalue"] = best_hits_df.apply(
-        lambda row: row["report_label"] + "_evalue", axis=1
-    )
-    best_hits_df["db_function_sig"] = best_hits_df.apply(
-        lambda row: row["report_label"] + "_function_sig", axis=1
-    )
+    print("Reshaping best hits table... ", end="", flush=True)
 
-    # Wide tables: function, params, significance
-    function_df = best_hits_df.pivot(
-        columns="db_function", index="query", values="report_function"
-    ).copy()
-    # Pivot bits and evalue separately
-    bits_df = best_hits_df.pivot(
-        columns="db_bits", index="query", values="bits"
-    ).copy()
-    evalue_df = best_hits_df.pivot(
-        columns="db_evalue", index="query", values="evalue"
-    ).copy()
-    sig_df = best_hits_df.pivot(
-        columns="db_function_sig", index="query", values="report_significance"
-    ).copy()
+    # Vectorized label columns (replaces apply(lambda row: ...))
+    rl = best_hits_df["report_label"].astype("string")
+    best_hits_df["db_function"] = rl + "_function"
+    best_hits_df["db_bits"] = rl + "_bits"
+    best_hits_df["db_evalue"] = rl + "_evalue"
+    best_hits_df["db_function_sig"] = rl + "_function_sig"
+
+    # Wide tables (aggfunc='first' tolerates duplicates if they appear)
+    function_df = best_hits_df.pivot_table(index="query", columns="db_function", values="report_function", aggfunc="first")
+    bits_df = best_hits_df.pivot_table(index="query", columns="db_bits", values="bits", aggfunc="first")
+    evalue_df = best_hits_df.pivot_table(index="query", columns="db_evalue", values="evalue", aggfunc="first")
+    sig_df = best_hits_df.pivot_table(index="query", columns="db_function_sig", values="report_significance", aggfunc="first")
 
     function_df.index.name = "PC"
     bits_df.index.name = "PC"
     evalue_df.index.name = "PC"
     sig_df.index.name = "PC"
 
-    # Merge all PC-level info
-    report_df = function_df.merge(sig_df, on="PC", how="left")
-    report_df = report_df.merge(bits_df, on="PC", how="left")
-    report_df = report_df.merge(evalue_df, on="PC", how="left")
+    report_df = function_df.join(sig_df, how="left").join(bits_df, how="left").join(evalue_df, how="left")
+    print("Done!", flush=True)
 
-    print("Done!")
+    print("Loading ORF and PC tables... ", end="", flush=True)
+    orfs_df = pd.read_csv(args.confident, low_memory=False)
+    pcs2proteins_df = pd.read_csv(args.pcs2proteins, sep="\t", usecols=[0, 1], low_memory=False)
+    print("Done!", flush=True)
 
-    # Map PC-level functions back to proteins
-    print("Loading ORF and PC tables... ", end="")
-    orfs_df = pd.read_csv(args.confident)
-    pcs2proteins_df = pd.read_csv(args.pcs2proteins, sep="\t", usecols=[0, 1])
-    print("Done!")
-
-    print("Merging ORFs with PCs and functions... ", end="")
+    print("Merging ORFs with PCs and functions... ", end="", flush=True)
     orfs_df = orfs_df.merge(pcs2proteins_df, on="proteinID", how="left")
     orfs_df = orfs_df.merge(report_df, on="PC", how="left")
-    print("Done!")
+    print("Done!", flush=True)
 
-    # Identify dynamic columns
-    func_cols   = sorted(c for c in orfs_df.columns if c.endswith("_function"))
-    sig_cols    = sorted(c for c in orfs_df.columns if c.endswith("_function_sig"))
-    bits_cols   = sorted(c for c in orfs_df.columns if c.endswith("_bits"))
+    func_cols = sorted(c for c in orfs_df.columns if c.endswith("_function"))
+    sig_cols = sorted(c for c in orfs_df.columns if c.endswith("_function_sig"))
+    bits_cols = sorted(c for c in orfs_df.columns if c.endswith("_bits"))
     evalue_cols = sorted(c for c in orfs_df.columns if c.endswith("_evalue"))
 
     fixed_prefix = ["proteinID", "PC", "protein_len"]
-    fixed_suffix = [
-        "protein", "orf", "start", "stop", "strand",
-        "contigID", "orf_len", "codon_stop", "source",
-    ]
+    fixed_suffix = ["protein", "orf", "start", "stop", "strand", "contigID", "orf_len", "codon_stop", "source"]
 
     cols = fixed_prefix + func_cols + sig_cols + fixed_suffix + bits_cols + evalue_cols
     cols_present = [c for c in cols if c in orfs_df.columns]
-    orfs_df = orfs_df[cols_present]
-    orfs_df = orfs_df.fillna("-")
+    orfs_df = orfs_df[cols_present].fillna("-")
 
-    # Always write full annotation for downstream use (e.g. GENBANK)
-    print(f"Writing full annotation to {args.out_annotation_full} ... ", end="")
+    print(f"Writing full annotation to {args.out_annotation_full} ... ", end="", flush=True)
     Path(args.out_annotation_full).parent.mkdir(parents=True, exist_ok=True)
     orfs_df.to_csv(args.out_annotation_full, sep="\t", index=False)
-    print("Done!")
+    print("Done!", flush=True)
 
-    # Identify evalue columns
+    # Format evalues (vectorized)
     evalue_cols = [c for c in orfs_df.columns if c.endswith("_evalue")]
-
-    # Format evalues in scientific notation
     for col in evalue_cols:
-        orfs_df[col] = orfs_df[col].apply(
-            lambda x: f'{float(x):.2e}' if str(x) != '-' and float(x) != 0 else ('0' if str(x) != '-' else '-')
+        s = orfs_df[col].astype("string")
+        num = pd.to_numeric(s.where(s != "-"), errors="coerce")  # NaN for '-'
+        formatted = np.where(
+            s.to_numpy() == "-",
+            "-",
+            np.where(
+                (num.fillna(0.0).to_numpy() == 0.0),
+                "0",
+                np.char.mod("%.2e", num.to_numpy(dtype=float))
+            )
         )
+        orfs_df[col] = formatted
 
-    # Build public table (without sequences)
     seq_cols = [c for c in ["protein", "orf"] if c in orfs_df.columns]
     public_df = orfs_df.drop(columns=seq_cols)
 
     if write_annotation:
-        print(f"Writing public annotation to {args.out_annotation_public} ... ", end="")
+        print(f"Writing public annotation to {args.out_annotation_public} ... ", end="", flush=True)
         Path(args.out_annotation_public).parent.mkdir(parents=True, exist_ok=True)
         public_df.to_csv(args.out_annotation_public, sep="\t", index=False)
-        print("Done!")
+        print("Done!", flush=True)
     else:
-        print("WRITE_ANNOTATION_TABLE is false; not writing annotation.tsv (public table).")
+        print("WRITE_ANNOTATION_TABLE is false; not writing annotation.tsv (public table).", flush=True)
 
 
 if __name__ == "__main__":
