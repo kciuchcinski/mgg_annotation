@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+import argparse
+import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+import pandas as pd
+
+_repr_to_pc = None
+_pc_members = None
+_outdir = None
+
+
+def _init_worker(repr_to_pc, pc_members, outdir):
+    global _repr_to_pc, _pc_members, _outdir
+    _repr_to_pc = repr_to_pc
+    _pc_members = pc_members
+    _outdir = Path(outdir)
+
+
+def parse_a3m(filepath):
+    records = []
+    header = None
+    pid = None
+    seq_lines = []
+    with open(filepath) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith(">"):
+                if header is not None:
+                    records.append((pid, header, "".join(seq_lines)))
+                header = line
+                pid = line[1:].split()[0]
+                seq_lines = []
+            else:
+                seq_lines.append(line)
+    if header is not None:
+        records.append((pid, header, "".join(seq_lines)))
+    return records
+
+
+def process_one(a3m_file):
+    records = parse_a3m(a3m_file)
+    if not records:
+        return None, "empty"
+
+    repr_id = records[0][0]
+    pc = _repr_to_pc.get(repr_id)
+    if pc is None:
+        return repr_id, "no_pc"
+
+    by_id = {r[0]: r for r in records}
+
+    ordered = []
+    for pid in _pc_members.get(pc, []):
+        if pid in by_id:
+            ordered.append(by_id[pid])
+
+    if not ordered:
+        return pc, "no_members"
+
+    out_path = _outdir / f"{pc}.a3m"
+    with open(out_path, "w") as f:
+        f.write("#A3M#\n")
+        for i, (pid, header, seq) in enumerate(ordered):
+            if i == 0:
+                f.write(f">{pc}\n")
+            else:
+                f.write(f"{header}\n")
+            for j in range(0, len(seq), 60):
+                f.write(seq[j:j + 60] + "\n")
+
+    return pc, "ok"
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(
+        description="Clean unpacked per-cluster A3Ms, rename to PC IDs, "
+                    "ensure representative is first, add #A3M# header"
+    )
+    ap.add_argument("--msa-dir", required=True)
+    ap.add_argument("--map", required=True)
+    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--threads", type=int, default=32)
+    return ap.parse_args()
+
+
+def main():
+    args = parse_args()
+    msa_dir = Path(args.msa_dir)
+    map_path = Path(args.map)
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    pcs = pd.read_csv(map_path, sep="\t")
+    for col in ("PC", "proteinID", "repr"):
+        if col not in pcs.columns:
+            raise ValueError(f"Missing column: {col}")
+
+    # repr column is the protein ID of the representative, not a boolean
+    # A protein is the representative when proteinID == repr
+    pcs["is_repr"] = pcs["proteinID"] == pcs["repr"]
+
+    # representative protein ID -> PC name
+    repr_to_pc = dict(zip(
+        pcs.loc[pcs["is_repr"], "proteinID"],
+        pcs.loc[pcs["is_repr"], "PC"]
+    ))
+
+    # PC -> ordered member list (representative first)
+    pc_members = {}
+    for pc, group in pcs.groupby("PC", sort=False):
+        repr_ids = group.loc[group["is_repr"], "proteinID"].tolist()
+        other_ids = group.loc[~group["is_repr"], "proteinID"].tolist()
+        pc_members[pc] = repr_ids + other_ids
+
+    a3m_files = sorted(msa_dir.glob("*.a3m"))
+
+    # Diagnostics
+    print(f"Input A3M files:        {len(a3m_files)}", file=sys.stderr)
+    print(f"PCs in mapping:         {pcs['PC'].nunique()}", file=sys.stderr)
+    print(f"Representative entries: {len(repr_to_pc)}", file=sys.stderr)
+
+    if not repr_to_pc:
+        print(f"BUG: no representatives found", file=sys.stderr)
+        print(f"Sample rows:\n{pcs.head()}", file=sys.stderr)
+        return 1
+
+    if not a3m_files:
+        print(f"BUG: no .a3m files in {msa_dir}", file=sys.stderr)
+        print(f"Contents: {list(msa_dir.iterdir())[:10]}", file=sys.stderr)
+        return 1
+
+    # Parallel processing
+    stats = {"ok": 0, "empty": 0, "no_pc": 0, "no_members": 0}
+    no_pc_examples = []
+
+    with ProcessPoolExecutor(
+        max_workers=args.threads,
+        initializer=_init_worker,
+        initargs=(repr_to_pc, pc_members, str(outdir))
+    ) as executor:
+        futures = {executor.submit(process_one, f): f for f in a3m_files}
+        for future in as_completed(futures):
+            result_id, status = future.result()
+            stats[status] += 1
+            if status == "no_pc" and len(no_pc_examples) < 5:
+                no_pc_examples.append(result_id)
+
+    print(f"Results: {stats}", file=sys.stderr)
+    if no_pc_examples:
+        print(f"Unmapped representative examples: {no_pc_examples}", file=sys.stderr)
+    output_count = len(list(outdir.glob("*.a3m")))
+    print(f"Output A3M files:       {output_count}", file=sys.stderr)
+
+    if output_count == 0:
+        print("ERROR: no output produced", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

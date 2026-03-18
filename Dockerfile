@@ -23,7 +23,7 @@ RUN micromamba install -y -n base -c conda-forge -c bioconda \
         seaborn \
         matplotlib \
         hhsuite \
-        mmseqs2=13.45111 \
+        mmseqs2 \
         clustalo=1.2.4 \
         bedtools=2.30.0 \
         glimmer=3.02 \

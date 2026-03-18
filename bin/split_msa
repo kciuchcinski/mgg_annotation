@@ -23,44 +23,41 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Load mapping
     pcs = pd.read_csv(map_path, sep="\t")
-    req = {"PC", "proteinID"}
+    req = {"PC", "proteinID", "repr"}
     missing = req - set(pcs.columns)
     if missing:
         raise ValueError(f"PCs2proteins mapping missing columns: {sorted(missing)}")
 
-    # Load all records; treat as FASTA/A3M (Biopython handles aligned sequences as plain sequences)
     records = list(SeqIO.parse(msa_path, "fasta"))
     if not records:
-        # Nothing to split; exit successfully
         return 0
 
-    # Index proteinID -> record; note: record.id must match proteinID exactly
     by_id = {rec.id: rec for rec in records}
 
-    # For each PC, assemble records in mapping order
     for pc, group in pcs.groupby("PC", sort=False):
-        pids = group["proteinID"].tolist()
+        # Representative first — defines match columns
+        repr_ids = group.loc[group["repr"] == True, "proteinID"].tolist()
+        other_ids = group.loc[group["repr"] != True, "proteinID"].tolist()
+        pids = repr_ids + other_ids
+
         pc_records = []
         for pid in pids:
             rec = by_id.get(pid)
             if rec is None:
                 continue
-            # Shallow copy to avoid header mutation side-effects
-            rec_copy = SeqRecord(rec.seq, id=rec.id, name=rec.name, description=rec.description)
+            rec_copy = SeqRecord(rec.seq, id=rec.id, name="", description="")
             pc_records.append(rec_copy)
 
         if not pc_records:
             continue
 
-        # Set the first header to the PC id, no description
         pc_records[0].id = pc
-        pc_records[0].name = ""
-        pc_records[0].description = ""
-
+        
         out_a3m = outdir / f"{pc}.a3m"
-        SeqIO.write(pc_records, out_a3m, "fasta")
+        with open(out_a3m, "w") as f:
+            f.write("#A3M#\n")
+            SeqIO.write(pc_records, f, "fasta")
 
     return 0
 

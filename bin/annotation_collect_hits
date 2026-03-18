@@ -13,6 +13,7 @@ import numpy as np
 from csb.bio.io import HHOutputParser
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import islice
+from pathlib import Path
 
 # Configuration for high-performance execution
 MAX_WORKERS = 160
@@ -69,7 +70,7 @@ def process_batch(file_paths, dbname):
         try:
             # We catch all exceptions to prevent one bad file from killing the worker
             parsed_table = parser.parse_file(fpath)
-            qname = parsed_table.query_name
+            qname = Path(fpath).stem
             
             for hit in parsed_table:
                 rows.append([

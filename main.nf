@@ -203,15 +203,23 @@ process CLUSTERING {
     path proteins_fasta
     output:
     path "raw_PCs.tsv", emit: raw_pcs
-    path "raw_msa.a3m", emit: raw_msa
+    path "msa_unpacked", emit: msa_dir
     shell:
     """
-    mkdir -p tmp
+    mkdir -p tmp msa_unpacked
     mmseqs createdb ${proteins_fasta} tmp/PROTEIN-DB > createdb.log 2>&1
-    mmseqs cluster tmp/PROTEIN-DB tmp/CLUSTER-DB . --min-seq-id ${params.CLUSTERING.IDENTITY} -s ${params.CLUSTERING.SENSITIVITY} -c ${params.CLUSTERING.COVERAGE} -e ${params.CLUSTERING.EVAL} > cluster.log 2>&1
-    mmseqs createtsv tmp/PROTEIN-DB tmp/PROTEIN-DB tmp/CLUSTER-DB raw_PCs.tsv > createtsv.log 2>&1
-    mmseqs result2msa tmp/PROTEIN-DB tmp/PROTEIN-DB tmp/CLUSTER-DB tmp/CLU-MSA-DB --msa-format-mode 3 > result2msa.log 2>&1
-    cp tmp/CLU-MSA-DB raw_msa.a3m
+    mmseqs cluster tmp/PROTEIN-DB tmp/CLUSTER-DB . \
+        --min-seq-id ${params.CLUSTERING.IDENTITY} \
+        -s ${params.CLUSTERING.SENSITIVITY} \
+        -c ${params.CLUSTERING.COVERAGE} \
+        -e ${params.CLUSTERING.EVAL} \
+        --alignment-mode 3 \
+        --cov-mode 0 > cluster.log 2>&1
+    mmseqs createtsv tmp/PROTEIN-DB tmp/PROTEIN-DB tmp/CLUSTER-DB \
+        raw_PCs.tsv > createtsv.log 2>&1
+    mmseqs result2msa tmp/PROTEIN-DB tmp/PROTEIN-DB tmp/CLUSTER-DB \
+        tmp/CLU-MSA-DB --msa-format-mode 5 > result2msa.log 2>&1
+    mmseqs unpackdb tmp/CLU-MSA-DB msa_unpacked --unpack-suffix .a3m
     """
 }
 
@@ -229,6 +237,21 @@ process PCS2PROTEINS {
   set -euo pipefail
   PCs2proteins --input ${raw_pcs} --output PCs2proteins.tsv
   """
+}
+
+process PREPARE_A3M {
+    input:
+    path msa_dir
+    path pcs_map
+
+    output:
+    path "msa_split/*.a3m", emit: per_pc_a3m
+
+    shell:
+    """
+    set -euo pipefail
+    prepare_a3m --msa-dir ${msa_dir} --map ${pcs_map} --outdir msa_split
+    """
 }
 
 process CLEAN_MSA {
@@ -277,7 +300,7 @@ process BUILD_FFINDEX {
 
 // 9) Enrich via PHROGS
 process ENRICH_MSA_PHROGS {
-    cpus 4
+    cpus params.ENRICH_CPUS
     tag "enrich_${task.hash.substring(0,8)}"
     input:
     tuple val(pc_ids), path(qidx), path(qdat)
@@ -305,7 +328,7 @@ def dbMatrix = Channel.of(
 )
 
 process HHSUITE_SEARCH_BATCH {
-    cpus 4
+    cpus params.THREADS_PER_BATCH
     tag { "${dbname}_${task.hash.substring(0,8)}" }
     input:
     tuple val(dbname), val(dbpath), val(niter), val(pc_ids), path(ffidx), path(ffdat)
@@ -373,7 +396,7 @@ process GATHER_HHR {
 
 
 process COLLECT_HITS {
-    cpus 160
+    cpus 80
     if( params.WRITE_SEARCH_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'search.tsv'
     }
@@ -504,11 +527,13 @@ workflow {
     // Stage 3: Clustering & MSA
     ch_clustering   = CLUSTERING(ch_concat_proteins)
     ch_pcs2proteins = PCS2PROTEINS(ch_clustering.raw_pcs)
-    ch_clean_msa    = CLEAN_MSA(ch_clustering.raw_msa)
+    //ch_clean_msa    = CLEAN_MSA(ch_clustering.raw_msa)
 
     // Materialize paired inputs for SPLIT_MSA (no collect to avoid LinkedList payloads)
-    def ch_msa_and_map = ch_clean_msa.combine(ch_pcs2proteins)
-    ch_split_msa = SPLIT_MSA(ch_msa_and_map)
+    //def ch_msa_and_map = ch_clean_msa.combine(ch_pcs2proteins)
+    //ch_split_msa = SPLIT_MSA(ch_msa_and_map)
+
+    ch_split_msa = PREPARE_A3M(ch_clustering.msa_dir, ch_pcs2proteins)
 
     // Stage 4: Batching & Enrichment
     // To avoid all big clusters (since they are passed in order), include a size-aware shuffle before chunking
