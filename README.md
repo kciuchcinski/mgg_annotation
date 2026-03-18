@@ -1,6 +1,6 @@
 # MGG Annotation Pipeline
 
-A Nextflow pipeline for annotating phage genomes using PHROGs-enriched profile HMM searches across multiple databases for sensitive and precise functional annotation.
+A Nextflow pipeline for annotating phage genomes using PHROGs-enriched profile HMM searches across multiple databases (PHROGs, PFAM, ECOD) for sensitive and precise functional annotation.
 
 ## Overview
 
@@ -10,7 +10,7 @@ The pipeline takes phage genome assemblies (FASTA) as input and produces per-ORF
 2. **ORF calling** — predicts open reading frames using both Prodigal-gv (meta mode) and Glimmer3, then reconciles predictions.
 3. **Protein clustering** — clusters translated ORFs with MMseqs2 to reduce redundancy and generate multiple sequence alignments (MSAs).
 4. **MSA enrichment** — enriches MSAs against the PHROGs database using HHblits to improve search sensitivity.
-5. **Database searches** — searches enriched profiles against four HHsuite-formatted databases: PHROGs, PFAM, ECOD, and AlanDB.
+5. **Database searches** — searches enriched profiles against three HHsuite-formatted databases: PHROGs, PFAM, and ECOD.
 6. **Annotation & export** — collects and filters hits, builds a per-ORF annotation table, and exports GenBank files.
 
 ## Requirements
@@ -29,8 +29,6 @@ The pipeline takes phage genome assemblies (FASTA) as input and produces per-ORF
 ```bash
 curl -s https://get.nextflow.io | bash
 chmod +x nextflow
-
-# Optionally 
 mv nextflow ~/.local/bin/   # or any directory on your $PATH
 ```
 
@@ -39,7 +37,7 @@ See the [official Nextflow docs](https://www.nextflow.io/docs/latest/install.htm
 ### 2. Clone the repository
 
 ```bash
-git clone https://github.com/kciuchcinski/mgg_annotation.git
+git clone https://github.com/<owner>/mgg_annotation.git
 cd mgg_annotation
 ```
 
@@ -108,45 +106,60 @@ Replace `/path/to/your/envs/phage_annotation` with the actual path (e.g. the out
 
 ## Database setup
 
-The pipeline requires the following databases and metadata files to be available locally. All database paths are resolved relative to a single root directory (`DB_ROOT` in `config.yml`), but individual paths can be overridden.
+The pipeline requires three HHsuite-formatted profile databases, a Glimmer training file, and one metadata table. All paths are resolved relative to `DB_ROOT` (set in `config.yml`), but individual paths can be overridden.
 
-### Required databases
+### Quick setup (recommended)
 
-| Database | Expected path (relative to `DB_ROOT`) | Description |
+Run the provided setup script to download and prepare all databases:
+
+```bash
+bash setup_databases.sh /path/to/databases
+```
+
+The script downloads each database, extracts it, and renames directories to the version-agnostic paths expected by the pipeline defaults. Existing databases are skipped, so the script is safe to re-run.
+
+After completion, set `DB_ROOT` in `config.yml` to the path you provided.
+
+### Manual setup
+
+If you prefer to set up databases manually, download each one into `DB_ROOT`:
+
+| Database | Download | Target directory |
 |---|---|---|
-| Glimmer training file | `training-file_refseq.icm` | Pre-trained ICM for Glimmer3 ORF prediction |
-| PHROGs (HHsuite) | `PHROGS_v4/phrogs` | Prokaryotic Virus Remote Homologous Groups v4, HHsuite-formatted |
-| PFAM (HHsuite) | `pfamA_32/pfam` | Pfam-A v32, HHsuite-formatted |
-| ECOD (HHsuite) | `ECOD_F70_20230309/ECOD_F70_20230309` | ECOD domain database (F70, 2023-03-09), HHsuite-formatted |
-| AlanDB (HHsuite) | `AlanDavidson/profile-db/all_proteins` | Alan Davidson phage protein database, HHsuite-formatted |
+| PHROGs v4 | [phrogs_hhsuite_db.tar.gz](https://phrogs.lmge.uca.fr/downloads_from_website/phrogs_hhsuite_db.tar.gz) | `phrogs/` |
+| PHROGs metadata | [phrogs_table...tsv](https://phrogs.lmge.uca.fr/phrog_table/phrogs_table_almostfinal_plusGO_wNA_utf8.tsv) | `tables/phrog_annot_v4.tsv` |
+| Pfam-A | [pfamA_35.0.tar.gz](https://wwwuser.gwdguser.de/~compbiol/data/hhsuite/databases/hhsuite_dbs/pfamA_35.0.tar.gz) | `pfam/` |
+| ECOD | [ecod.v294.F40.hhm_db.tar.gz](http://prodata.swmed.edu/ecod/distributions/ecod.v294.F40.hhm_db.tar.gz) | `ecod/` |
+| Glimmer ICM | *See note below* | `training-file_refseq.icm` |
 
-### Required metadata tables
+After extraction, rename the versioned directories to their version-agnostic names (e.g. `pfamA_35.0/` to `pfam/`). The HHsuite database prefix inside each directory must also match the directory name (e.g. `pfam/pfam_a3m.ffdata`).
 
-| File | Expected path (relative to `DB_ROOT`) | Description |
-|---|---|---|
-| PHROGs annotation table | `tables/phrog_annot_v4.tsv` | Functional category mappings for PHROGs |
-| AlanDB annotation table | `tables/alan_annot.tsv` | Functional annotations for AlanDB entries |
+Alternatively, keep the original directory names and override the paths in `config.yml`:
+
+```yaml
+HHSUITE:
+  PFAM: "/path/to/databases/pfamA_35.0/pfam"
+  ECOD: "/path/to/databases/ECOD_F70_v294/ecod"
+```
+
+> **Note:** The Glimmer training file (`training-file_refseq.icm`) must be placed in `DB_ROOT` manually for now. A download link will be provided in a future release.
 
 ### Expected directory layout
+
+After running `setup_databases.sh` (or manual setup with default names):
 
 ```
 DB_ROOT/
 ├── training-file_refseq.icm
-├── PHROGS_v4/
+├── phrogs/
 │   └── phrogs{_a3m.ffdata, _a3m.ffindex, _hhm.ffdata, _hhm.ffindex, ...}
-├── pfamA_32/
+├── pfam/
 │   └── pfam{_a3m.ffdata, _a3m.ffindex, _hhm.ffdata, _hhm.ffindex, ...}
-├── ECOD_F70_20230309/
-│   └── ECOD_F70_20230309{_a3m.ffdata, _a3m.ffindex, ...}
-├── AlanDavidson/
-│   └── profile-db/
-│       └── all_proteins{_a3m.ffdata, _a3m.ffindex, ...}
+├── ecod/
+│   └── ecod{_a3m.ffdata, _a3m.ffindex, ...}
 └── tables/
-    ├── phrog_annot_v4.tsv
-    └── alan_annot.tsv
+    └── phrog_annot_v4.tsv
 ```
-
-<!-- TODO: Add download links / setup script for each database before publication -->
 
 ## Configuration
 
@@ -188,7 +201,7 @@ DB_ROOT: /path/to/databases
 
 #### Annotation filtering thresholds
 
-These thresholds control which HHsuite hits are retained in the final annotation. Separate thresholds are applied to PHROGs and to the domain databases (PFAM, ECOD, AlanDB).
+These thresholds control which HHsuite hits are retained in the final annotation. Separate thresholds are applied to PHROGs and to the domain databases (PFAM, ECOD).
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -277,7 +290,7 @@ Results are written to the directory specified by `OUTPUT_DIR`.
 
 | File | Description |
 |---|---|
-| `annotation.tsv` | Per-ORF annotation table with top hits from each database (if `WRITE_ANNOTATION_TABLE` is enabled) |
+| `annotation.tsv` | Per-ORF annotation table with top hits from each database |
 | `report.tsv` | Filtered hits passing the probability and coverage thresholds |
 | `search.tsv` | Full unfiltered hits table (if `WRITE_SEARCH_TABLE` is enabled) |
 | `PCs2proteins.tsv` | Mapping of protein clusters (PCs) to individual protein IDs |
@@ -286,64 +299,6 @@ Results are written to the directory specified by `OUTPUT_DIR`.
 ### Intermediate files
 
 Nextflow stores intermediate files in the `work/` directory. This directory can grow large and may be safely deleted after a successful run.
-
-## Pipeline DAG
-
-```
-FASTA files
-    │
-    ▼
-CHECK_INPUT ──────────────────────────────────────┐
-    │                                              │
-    ├──▶ PRODIGAL ──▶ CONCAT_PRODIGAL ────────┐   │
-    │                                          │   │
-    └──▶ GLIMMER3 ──▶ CONCAT_GLIMMER          │   │
-              │                                │   │
-              ▼                                │   │
-         FILTER_GLIMMER                        │   │
-              │                                │   │
-              ▼                                ▼   │
-         PROCESSING ◀─────────────────────────────┘
-              │
-              ▼
-    EXTRACT_TRANSLATE_ORFS
-         │          │
-         ▼          ▼
-  REORGANIZE    CONCAT_PROTEINS
-    TABLE            │
-      │              ▼
-      │         CLUSTERING
-      │          │       │
-      │          ▼       ▼
-      │    PCS2PROTEINS  PREPARE_A3M
-      │          │           │
-      │          │           ▼
-      │          │     BUILD_FFINDEX
-      │          │           │
-      |          │           ▼
-      │          │    ENRICH_MSA_PHROGS
-      │          │           │
-      │          │           ▼
-      │          │    HHSUITE_SEARCH_BATCH (×4 DBs)
-      │          │           │
-      │          │           ▼
-      │          │       UNPACK_HHR
-      │          │           │
-      │          │           ▼
-      │          │       GATHER_HHR
-      │          │           │
-      │          ▼           ▼
-      │        COLLECT_HITS
-      │              │
-      │              ▼
-      │         FILTER_HITS
-      │              │
-      │              ▼
-      └───▶  BUILD_ANNOTATION
-                     │
-                     ▼
-                  GENBANK
-```
 
 ## Software versions
 
@@ -367,7 +322,7 @@ The containerized environment includes:
 
 If you use this pipeline, please cite:
 
-> *Citation pending.*
+> *TODO*
 
 ## License
 

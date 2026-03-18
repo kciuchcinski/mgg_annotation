@@ -10,17 +10,18 @@ params.PHAGE_MIN_LENGTH = params.PHAGE_MIN_LENGTH ?: 2000
 
 params.BATCH_SIZE        = params.BATCH_SIZE        ?: 50
 params.THREADS_PER_BATCH = params.THREADS_PER_BATCH ?: 8
-params.PARSING_CPUS       = params.PARSING_CPUS       ?: 16
 params.SEARCH_TOOL       = params.SEARCH_TOOL       ?: "hhblits_omp"
 
 // DB root
 params.DB_ROOT = params.DB_ROOT ?: "$baseDir/databases"
+
+// These three *must* be initialised before first use anywhere
 params.GLIMMER_TRAIN = params.GLIMMER_TRAIN ?: "${params.DB_ROOT}/training-file_refseq.icm"
 
 params.HHSUITE            = params.HHSUITE ?: [:]
-params.HHSUITE.PHROGS     = params.HHSUITE.PHROGS ?: "${params.DB_ROOT}/PHROGS_v4/phrogs"
-params.HHSUITE.PFAM       = params.HHSUITE.PFAM   ?: "${params.DB_ROOT}/pfamA_32/pfam"
-params.HHSUITE.ECOD       = params.HHSUITE.ECOD   ?: "${params.DB_ROOT}/ECOD_F70_20230309/ECOD_F70_20230309"
+params.HHSUITE.PHROGS     = params.HHSUITE.PHROGS ?: "${params.DB_ROOT}/phrogs/phrogs"
+params.HHSUITE.PFAM       = params.HHSUITE.PFAM   ?: "${params.DB_ROOT}/pfam/pfam"
+params.HHSUITE.ECOD       = params.HHSUITE.ECOD   ?: "${params.DB_ROOT}/ecod/ecod"
 
 params.METADATA                          = params.METADATA ?: [:]
 params.METADATA.PHROGS_TABLE             = params.METADATA.PHROGS_TABLE     ?: "${params.DB_ROOT}/tables/phrog_annot_v4.tsv"
@@ -250,31 +251,6 @@ process PREPARE_A3M {
     """
 }
 
-process CLEAN_MSA {
-  input:
-  path raw_msa
-  output:
-  path "msa.a3m"
-  shell:
-  """
-  set -euo pipefail
-  clean_msa --input ${raw_msa} --output msa.a3m
-  """
-}
-
-// 7) Split MSA
-process SPLIT_MSA {
-  input:
-  tuple path(msa), path(pcs_map)
-  output:
-  path "msa_split/*.a3m", emit: per_pc_a3m
-  shell:
-  """
-  set -euo pipefail
-  split_msa --msa ${msa} --map ${pcs_map} --outdir msa_split
-  """
-}
-
 // 8) Build FFindex
 process BUILD_FFINDEX {
     tag "chunk_${task.hash.substring(0,8)}"
@@ -345,7 +321,7 @@ process HHSUITE_SEARCH_BATCH {
 process UNPACK_HHR {
     // Tag with the unique ID so you can distinguish tasks in the log
     tag { "unpack_${dbname}_${pc_ids.toString().md5().substring(0,8)}" }
-    params.THREADS_PER_BATCH
+    cpus 4
     input:
     tuple val(dbname), val(pc_ids), path(ffidx), path(ffdat)
 
@@ -366,7 +342,7 @@ process UNPACK_HHR {
 
 process GATHER_HHR {
     tag "gather_${dbname}"
-    cpus params.PARSING_CPUS
+    cpus 64
     input:
     tuple val(dbname), path(dirs)
 
@@ -391,7 +367,7 @@ process GATHER_HHR {
 
 
 process COLLECT_HITS {
-    cpus params.PARSING_CPUS
+    cpus 80
     if( params.WRITE_SEARCH_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'search.tsv'
     }
@@ -420,7 +396,7 @@ process COLLECT_HITS {
 }
 
 process FILTER_HITS {
-    cpus params.PARSING_CPUS
+    cpus 64
     publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'report.tsv'
 
     input:
@@ -450,7 +426,7 @@ process FILTER_HITS {
 }
 
 process BUILD_ANNOTATION {
-    cpus params.PARSING_CPUS
+    cpus 64
     if( params.WRITE_ANNOTATION_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'annotation.tsv'
     }
@@ -479,7 +455,7 @@ process BUILD_ANNOTATION {
 
 // 14) GenBank export
 process GENBANK {
-    cpus params.PARSING_CPUS
+    cpus 64
     publishDir "${params.OUTPUT_DIR}/genbanks", mode: 'copy', pattern: '*.gb'
 
     input:
@@ -518,11 +494,6 @@ workflow {
     // Stage 3: Clustering & MSA
     ch_clustering   = CLUSTERING(ch_concat_proteins)
     ch_pcs2proteins = PCS2PROTEINS(ch_clustering.raw_pcs)
-    //ch_clean_msa    = CLEAN_MSA(ch_clustering.raw_msa)
-
-    // Materialize paired inputs for SPLIT_MSA (no collect to avoid LinkedList payloads)
-    //def ch_msa_and_map = ch_clean_msa.combine(ch_pcs2proteins)
-    //ch_split_msa = SPLIT_MSA(ch_msa_and_map)
 
     ch_split_msa = PREPARE_A3M(ch_clustering.msa_dir, ch_pcs2proteins)
 

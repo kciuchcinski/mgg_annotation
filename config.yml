@@ -13,7 +13,7 @@ OUTPUT_DIR: test/output
 
 # Database root directory (use absolute path)
 # NOTE: You can also set per-db overrides in the DATABASES section below
-DB_ROOT: /net/home/plgrid/plgkciuchcinski/MCB/team/kciuchcinski/NEW_MGG_DATABASES
+DB_ROOT: databases
 
 # Minimum length for phages (bp)
 PHAGE_MIN_LENGTH: 2000
@@ -27,32 +27,25 @@ WRITE_ANNOTATION_TABLE: true
 # Set how many functions per protein per database should be reported. We recommend 2.
 N_FUNCTIONS_PER_DB: 2
 
-# --- Execution & Batching ---
-# We recommend using default values unless you know what you're doing
-BATCH_SIZE: 20
-THREADS_PER_BATCH: 4
-SEARCH_TOOL: "hhblits_omp"
-ENRICH_CPUS: 4
-PARSING_CPUS: 16
-
 # ==========================================
 # DATABASES
 # Default paths to databases are derived from DB_ROOT
 # You can uncomment the entries below to override specific database paths
 # ==========================================
 
-# # Path to glimmer training file (usually .icm)
-# GLIMMER_TRAIN: "/Users/karol/MGG Dropbox/Databases/Glimmer/training-file_refseq.icm"
+# # Path to glimmer training file (override if not in DB_ROOT)
+# GLIMMER_TRAIN: "/path/to/databases/training-file_refseq.icm"
 
-# # Paths to HHSuite databases. They should contain the .ffdata and .ffindex files
+# # Paths to HHSuite databases (override if not using default directory names)
+# # Each path should point to the DB prefix (without file extensions)
 # HHSUITE:
-#   PHROGS: "/path/to/hhsuite_db/phrogs"
-#   PFAM: "/path/to/hhsuite_db/pfam"
-#   ECOD: "/path/to/hhsuite_db/ecod"
+#   PHROGS: "/path/to/databases/phrogs/phrogs"
+#   PFAM: "/path/to/databases/pfam/pfam"
+#   ECOD: "/path/to/databases/ecod/ecod"
 
-# # Paths to metadata annotation tables. Those should point to specific csv/tsv files
+# # Path to metadata annotation table (override if not using default location)
 # METADATA:
-#   PHROGS_TABLE: "/path/to/metadata/phrog_annot_v4.tsv"
+#   PHROGS_TABLE: "/path/to/databases/tables/phrog_annot_v4.tsv"
 
 # ==========================================
 # ADVANCED CONFIGURATION
@@ -76,4 +69,8 @@ CLUSTERING:
   EVAL: 0.001
   SENSITIVITY: 7.5
 
-
+# --- Execution & Batching ---
+BATCH_SIZE: 20
+THREADS_PER_BATCH: 4
+SEARCH_TOOL: "hhblits_omp"
+ENRICH_CPUS: 4
