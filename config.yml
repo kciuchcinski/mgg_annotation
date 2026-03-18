@@ -49,12 +49,10 @@ PARSING_CPUS: 16
 #   PHROGS: "/path/to/hhsuite_db/phrogs"
 #   PFAM: "/path/to/hhsuite_db/pfam"
 #   ECOD: "/path/to/hhsuite_db/ecod"
-#   ALANDB: "/Users/karol/MGG Dropbox/Databases/AlanDavidson/profile-db/profiles"
 
 # # Paths to metadata annotation tables. Those should point to specific csv/tsv files
 # METADATA:
 #   PHROGS_TABLE: "/path/to/metadata/phrog_annot_v4.tsv"
-#   ALAN_TABLE: "/path/to/metadata/alan_annot.tsv"
 
 # ==========================================
 # ADVANCED CONFIGURATION
@@ -66,7 +64,7 @@ ANNOTATION_FILTERS:
     MIN_PROB: 0.7
     MIN_QCOV: 0.1
     MIN_TCOV: 0.1
-  DOMAIN_DBS:   # ECOD, ALANDB, PFAM
+  DOMAIN_DBS:   # ECOD, PFAM
     MIN_PROB: 0.7
     MIN_QCOV: 0.1
     MIN_TCOV: 0.1

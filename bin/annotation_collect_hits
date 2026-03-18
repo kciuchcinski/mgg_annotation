@@ -121,11 +121,9 @@ def main():
     )
     parser.add_argument("--pcs2proteins", required=True, help="PCs2proteins.tsv")
     parser.add_argument("--phrogs-dir", required=True, help="Directory with PHROGS .a3m files")
-    parser.add_argument("--alan-dir", required=True, help="Directory with ALANDB .a3m files")
     parser.add_argument("--pfam-dir", required=True, help="Directory with PFAM .a3m files")
     parser.add_argument("--ecod-dir", required=True, help="Directory with ECOD .a3m files")
     parser.add_argument("--phrogs-table", required=True, help="PHROGS metadata table (TSV)")
-    parser.add_argument("--alan-table", required=True, help="ALAN metadata table (TSV or CSV)")
     parser.add_argument("--write-search", required=True, help="Boolean flag: write search.tsv or not")
     parser.add_argument("--out-search", required=True, help="Output path for search.tsv")
 
@@ -135,7 +133,6 @@ def main():
     # Format: (directory, db_name)
     db_configs = [
         (args.phrogs_dir, "PHROGS"),
-        (args.alan_dir, "ALANDB"),
         (args.pfam_dir, "PFAM"),
         (args.ecod_dir, "ECOD")
     ]
@@ -143,7 +140,6 @@ def main():
     # Container for results
     results_map = {
         "PHROGS": [],
-        "ALANDB": [],
         "PFAM": [],
         "ECOD": []
     }
@@ -197,31 +193,15 @@ def main():
         return pd.concat(df_list, axis=0, ignore_index=True)
 
     phrogs_df = safe_concat(results_map["PHROGS"], "PHROGS")
-    alan_df = safe_concat(results_map["ALANDB"], "ALANDB")
     pfam_df = safe_concat(results_map["PFAM"], "PFAM")
     ecod_df = safe_concat(results_map["ECOD"], "ECOD")
 
     # Load Metadata (same logic as original)
-    print("Loading PHROGS & ALAN metadata...", flush=True)
+    print("Loading PHROGS metadata...", flush=True)
     phrogs_annot_df = pd.read_csv(args.phrogs_table, sep="\\t")
     phrogs_annot_df = phrogs_annot_df[
         ["phrog", "color", "annot", "category"]
     ].fillna("unknown function")
-
-    alan_annot_df = pd.read_csv(args.alan_table, sep=None, engine="python")
-    alan_annot_df = alan_annot_df.rename(
-        columns={
-            "definition": "annot",
-            "funct": "category",
-            "profile": "alan_profile",
-        }
-    )
-    alan_drop_cols = [
-        c for c in ["abbrev", "hmm.name", "family.name", "family.name.base",
-                    "where.it.occurs", "is.custom", "custom.hmm.exists"]
-        if c in alan_annot_df.columns
-    ]
-    alan_annot_df = alan_annot_df.drop(columns=alan_drop_cols, errors="ignore")
     print("Done!", flush=True)
 
     # Attach metadata
@@ -230,13 +210,10 @@ def main():
         phrogs_df["phrog"] = phrogs_df.apply(get_phrog, axis=1)
         phrogs_df = phrogs_df.merge(phrogs_annot_df, on="phrog", how="left")
 
-    if not alan_df.empty:
-        alan_df["alan_profile"] = alan_df["target"]
-        alan_df = alan_df.merge(alan_annot_df, on="alan_profile", how="left")
     print("Done!", flush=True)
 
     print("Combining all hits...", flush=True)
-    df = pd.concat([phrogs_df, alan_df, pfam_df, ecod_df], axis=0, ignore_index=True)
+    df = pd.concat([phrogs_df, pfam_df, ecod_df], axis=0, ignore_index=True)
 
     if df.empty:
         print("No hits found, writing empty search.tsv.", flush=True)
@@ -245,8 +222,7 @@ def main():
         return
 
     # Post-processing
-    df[["phrog", "alan_profile"]] = df.get(
-        ["phrog", "alan_profile"], pd.DataFrame(columns=["phrog", "alan_profile"])
+    df[["phrog", ]] = df.get(["phrog"], pd.DataFrame(columns=["phrog"])
     ).fillna("0")
     df["phrog"] = df["phrog"].astype(int, errors="ignore")
 

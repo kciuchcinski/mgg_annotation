@@ -21,15 +21,12 @@ params.HHSUITE            = params.HHSUITE ?: [:]
 params.HHSUITE.PHROGS     = params.HHSUITE.PHROGS ?: "${params.DB_ROOT}/PHROGS_v4/phrogs"
 params.HHSUITE.PFAM       = params.HHSUITE.PFAM   ?: "${params.DB_ROOT}/pfamA_32/pfam"
 params.HHSUITE.ECOD       = params.HHSUITE.ECOD   ?: "${params.DB_ROOT}/ECOD_F70_20230309/ECOD_F70_20230309"
-params.HHSUITE.ALANDB     = params.HHSUITE.ALANDB ?: "${params.DB_ROOT}/AlanDavidson/profile-db/all_proteins"
 
 params.METADATA                          = params.METADATA ?: [:]
 params.METADATA.PHROGS_TABLE             = params.METADATA.PHROGS_TABLE     ?: "${params.DB_ROOT}/tables/phrog_annot_v4.tsv"
-params.METADATA.ALAN_TABLE               = params.METADATA.ALAN_TABLE       ?: "${params.DB_ROOT}/tables/alan_annot.tsv"
 
 // DB iterations – also need defaults
 params.n_iter_phrogs = params.n_iter_phrogs ?: 1
-params.n_iter_alan   = params.n_iter_alan   ?: 1
 params.n_iter_pfam   = params.n_iter_pfam   ?: 2
 params.n_iter_ecod   = params.n_iter_ecod   ?: 2
 
@@ -321,7 +318,6 @@ process ENRICH_MSA_PHROGS {
 // 11) Batched DB searches (cartesian product db x enriched batches)
 def dbMatrix = Channel.of(
     tuple("PHROGS", params.HHSUITE.PHROGS, params.n_iter_phrogs),
-    tuple("ALANDB", params.HHSUITE.ALANDB, params.n_iter_alan),
     tuple("PFAM",   params.HHSUITE.PFAM,   params.n_iter_pfam),
     tuple("ECOD",   params.HHSUITE.ECOD,   params.n_iter_ecod)
 )
@@ -403,11 +399,9 @@ process COLLECT_HITS {
     input:
     path pcs2proteins_tsv
     path phrogs_dir
-    path alandb_dir
     path pfam_dir
     path ecod_dir
     path phrogs_tbl
-    path alan_tbl
 
     output:
     path "search.tsv"
@@ -417,11 +411,9 @@ process COLLECT_HITS {
     annotation_collect_hits \\
       --pcs2proteins ${pcs2proteins_tsv} \\
       --phrogs-dir ${phrogs_dir} \\
-      --alan-dir   ${alandb_dir} \\
       --pfam-dir   ${pfam_dir} \\
       --ecod-dir   ${ecod_dir} \\
       --phrogs-table ${phrogs_tbl} \\
-      --alan-table ${alan_tbl} \\
       --write-search ${params.WRITE_SEARCH_TABLE} \\
       --out-search search.tsv
     """
@@ -562,22 +554,18 @@ workflow {
 
     // Create per-DB singleton channels for annotation from the gathered directories
     def ch_phrogs_dir = ch_gathered_dirs.filter { it[0] == 'PHROGS' }.map { it[1] }.collect()
-    def ch_alandb_dir = ch_gathered_dirs.filter { it[0] == 'ALANDB' }.map { it[1] }.collect()
     def ch_pfam_dir   = ch_gathered_dirs.filter { it[0] == 'PFAM'   }.map { it[1] }.collect()
     def ch_ecod_dir   = ch_gathered_dirs.filter { it[0] == 'ECOD'   }.map { it[1] }.collect()
 
     def ch_phrogs_tbl = Channel.value(file(params.METADATA.PHROGS_TABLE))
-    def ch_alan_tbl   = Channel.value(file(params.METADATA.ALAN_TABLE))
 
     // 6.1 Collect raw hits (search.tsv)
     ch_hits_raw = COLLECT_HITS(
         ch_pcs2proteins.collect(),
         ch_phrogs_dir,
-        ch_alandb_dir,
         ch_pfam_dir,
         ch_ecod_dir,
         ch_phrogs_tbl,
-        ch_alan_tbl
     )
 
     // 6.2 Filter hits -> report.tsv
