@@ -33,7 +33,7 @@ def load_glimmer_results(glim):
             # save tables
             if len(comments) > 1:
                 rows_buf = StringIO('\n'.join(rows))
-                df = pd.read_csv(rows_buf, header=None, delim_whitespace=True)
+                df = pd.read_csv(rows_buf, header=None, sep=r'\s+')
                 dfs.append(df)
             rows = []
 
@@ -41,7 +41,7 @@ def load_glimmer_results(glim):
         elif i + 1 == len(file):
             rows.append(line)  # add last row
             rows_buf = StringIO('\n'.join(rows))
-            df = pd.read_csv(rows_buf, header=None, delim_whitespace=True)
+            df = pd.read_csv(rows_buf, header=None, sep=r'\s+')
             dfs.append(df)
 
         # table rows

@@ -3,13 +3,13 @@
 # ==========================================
 
 # Input directory containing phage fasta files
-PHAGES_DIR: ../INPHARED
+PHAGES_DIR: test/data/
 
 # File extension for input files
-INPUT_EXTENSION: fa
+INPUT_EXTENSION: fasta
 
 # Output directory for all results
-OUTPUT_DIR: ../INPHARED_OUT
+OUTPUT_DIR: test/output
 
 # Database root directory (use absolute path)
 # NOTE: You can also set per-db overrides in the DATABASES section below
@@ -26,6 +26,14 @@ WRITE_ANNOTATION_TABLE: true
 
 # Set how many functions per protein per database should be reported. We recommend 2.
 N_FUNCTIONS_PER_DB: 2
+
+# --- Execution & Batching ---
+# We recommend using default values unless you know what you're doing
+BATCH_SIZE: 20
+THREADS_PER_BATCH: 4
+SEARCH_TOOL: "hhblits_omp"
+ENRICH_CPUS: 4
+PARSING_CPUS: 16
 
 # ==========================================
 # DATABASES
@@ -70,8 +78,4 @@ CLUSTERING:
   EVAL: 0.001
   SENSITIVITY: 7.5
 
-# --- Execution & Batching ---
-BATCH_SIZE: 400
-THREADS_PER_BATCH: 4
-SEARCH_TOOL: "hhblits_omp"
-ENRICH_CPUS: 4
+

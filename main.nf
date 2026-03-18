@@ -10,12 +10,11 @@ params.PHAGE_MIN_LENGTH = params.PHAGE_MIN_LENGTH ?: 2000
 
 params.BATCH_SIZE        = params.BATCH_SIZE        ?: 50
 params.THREADS_PER_BATCH = params.THREADS_PER_BATCH ?: 8
+params.PARSING_CPUS       = params.PARSING_CPUS       ?: 16
 params.SEARCH_TOOL       = params.SEARCH_TOOL       ?: "hhblits_omp"
 
 // DB root
 params.DB_ROOT = params.DB_ROOT ?: "$baseDir/databases"
-
-// These three *must* be initialised before first use anywhere
 params.GLIMMER_TRAIN = params.GLIMMER_TRAIN ?: "${params.DB_ROOT}/training-file_refseq.icm"
 
 params.HHSUITE            = params.HHSUITE ?: [:]
@@ -350,7 +349,7 @@ process HHSUITE_SEARCH_BATCH {
 process UNPACK_HHR {
     // Tag with the unique ID so you can distinguish tasks in the log
     tag { "unpack_${dbname}_${pc_ids.toString().md5().substring(0,8)}" }
-    cpus 4
+    params.THREADS_PER_BATCH
     input:
     tuple val(dbname), val(pc_ids), path(ffidx), path(ffdat)
 
@@ -371,7 +370,7 @@ process UNPACK_HHR {
 
 process GATHER_HHR {
     tag "gather_${dbname}"
-    cpus 64
+    cpus params.PARSING_CPUS
     input:
     tuple val(dbname), path(dirs)
 
@@ -396,7 +395,7 @@ process GATHER_HHR {
 
 
 process COLLECT_HITS {
-    cpus 80
+    cpus params.PARSING_CPUS
     if( params.WRITE_SEARCH_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'search.tsv'
     }
@@ -429,7 +428,7 @@ process COLLECT_HITS {
 }
 
 process FILTER_HITS {
-    cpus 64
+    cpus params.PARSING_CPUS
     publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'report.tsv'
 
     input:
@@ -459,7 +458,7 @@ process FILTER_HITS {
 }
 
 process BUILD_ANNOTATION {
-    cpus 64
+    cpus params.PARSING_CPUS
     if( params.WRITE_ANNOTATION_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'annotation.tsv'
     }
@@ -488,7 +487,7 @@ process BUILD_ANNOTATION {
 
 // 14) GenBank export
 process GENBANK {
-    cpus 64
+    cpus params.PARSING_CPUS
     publishDir "${params.OUTPUT_DIR}/genbanks", mode: 'copy', pattern: '*.gb'
 
     input:

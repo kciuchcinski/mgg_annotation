@@ -39,7 +39,7 @@ def main():
 
     # calculating the total cds length for every contig (original loop and 0.9 factor)
     len_cds = {}
-    for contigID, contig_df in df.groupby(["contigID"]):
+    for contigID, contig_df in df.groupby("contigID"):
         total_len = contig_df["stop"].max() - contig_df["start"].min()
         max_cds_len = total_len * 0.9
         len_cds[contigID] = int(max_cds_len)
