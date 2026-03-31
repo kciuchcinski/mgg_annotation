@@ -1,29 +1,43 @@
-# configuration file
-PHAGES_DIR: test/data
-OUTPUT_DIR: test/output
-INPUT_EXTENSION: fasta
-PHAGE_MIN_LENGTH: 2000 # bp
-GLIMMER_TRAIN: databases/training-file_refseq.icm
-SEARCH_TOOL: hhsearch # hhblits (faster) | hhsearch (more sensitive)
+# Test configuration — uses the bundled test/data/ genomes and a local
+# databases/ directory.  Run with:
+#
+#   nextflow run main.nf -profile <apptainer|docker|conda> -params-file test/config.yml
 
-# proteins families
+# ==========================================
+# BASIC CONFIGURATION
+# ==========================================
+
+PHAGES_DIR: test/data
+INPUT_EXTENSION: fasta
+OUTPUT_DIR: test/output
+DB_ROOT: databases
+PHAGE_MIN_LENGTH: 2000
+WRITE_SEARCH_TABLE: true
+WRITE_ANNOTATION_TABLE: true
+N_FUNCTIONS_PER_DB: 2
+
+# ==========================================
+# ADVANCED CONFIGURATION
+# ==========================================
+
+ANNOTATION_FILTERS:
+  PHROGS:
+    MIN_PROB: 0.7
+    MIN_QCOV: 0.1
+    MIN_TCOV: 0.1
+  DOMAIN_DBS:   # ECOD, PFAM
+    MIN_PROB: 0.7
+    MIN_QCOV: 0.1
+    MIN_TCOV: 0.1
+
 CLUSTERING:
   IDENTITY: 0.5
   COVERAGE: 0.8
   EVAL: 0.001
   SENSITIVITY: 7.5
 
-# paths to HHsuite databases
-# TODO: Replace this with a path to single databases folder
-HHSUITE:
-  PHROGS: databases/phrogs_hhsuite_db/phrogs
-  PFAM: databases/pfamA_32/pfam
-  ECOD: databases/ECOD_F70/ECOD_F70_20200207
-  ALANDB: databases/AlanDavidson/profile-db/all_proteins
-
-# paths to metadata tables
-# TODO: Replace this with a path to single tables folder
-METADATA:
-  PHROGS_TABLE: 'dependencies/tables/phrog_annot_v4.tsv'
-  MGG_PHROGS_TABLE: 'dependencies/tables/v3_phrogs-table-rafal-3_12.csv'
-  ALAN_TABLE: 'dependencies/tables/alan_annot.tsv'
+BATCH_SIZE: 20
+THREADS_PER_BATCH: 4
+SEARCH_TOOL: "hhblits_omp"
+ENRICH_CPUS: 4
+PARSING_CPUS: 16

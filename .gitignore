@@ -1,4 +1,5 @@
 test/output
+*.bkp
 .snakemake
 nohup.out
 bin/__pycache__
