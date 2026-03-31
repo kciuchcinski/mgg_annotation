@@ -37,6 +37,7 @@ params.N_FUNCTIONS_PER_DB = params.N_FUNCTIONS_PER_DB ?: 2
 // Batch knobs
 params.chunk_size_a3m = params.chunk_size_a3m ?: params.BATCH_SIZE
 params.ENRICH_CPUS    = params.ENRICH_CPUS    ?: 8
+params.PARSING_CPUS   = params.PARSING_CPUS   ?: 16
 
 
 Channel
@@ -342,7 +343,7 @@ process UNPACK_HHR {
 
 process GATHER_HHR {
     tag "gather_${dbname}"
-    cpus 64
+    cpus params.PARSING_CPUS
     input:
     tuple val(dbname), path(dirs)
 
@@ -367,7 +368,7 @@ process GATHER_HHR {
 
 
 process COLLECT_HITS {
-    cpus 80
+    cpus params.PARSING_CPUS
     if( params.WRITE_SEARCH_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'search.tsv'
     }
@@ -396,7 +397,7 @@ process COLLECT_HITS {
 }
 
 process FILTER_HITS {
-    cpus 64
+    cpus params.PARSING_CPUS
     publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'report.tsv'
 
     input:
@@ -426,7 +427,7 @@ process FILTER_HITS {
 }
 
 process BUILD_ANNOTATION {
-    cpus 64
+    cpus params.PARSING_CPUS
     if( params.WRITE_ANNOTATION_TABLE ) {
       publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'annotation.tsv'
     }
@@ -455,7 +456,7 @@ process BUILD_ANNOTATION {
 
 // 14) GenBank export
 process GENBANK {
-    cpus 64
+    cpus params.PARSING_CPUS
     publishDir "${params.OUTPUT_DIR}/genbanks", mode: 'copy', pattern: '*.gb'
 
     input:

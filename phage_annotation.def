@@ -2,7 +2,7 @@ Bootstrap: docker
 From: mambaorg/micromamba:latest
 
 %post
-    apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*.
+    apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*
     # Install all conda packages from specified channels
     micromamba install -y -n base -c defaults -c bioconda -c conda-forge \
         python=3.11 \
