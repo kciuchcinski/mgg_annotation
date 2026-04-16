@@ -2,33 +2,33 @@
 
 ## Blocking
 
-- [ ] **Glimmer training file — add a download source.**
-  Line 145 currently says *"A download link will be provided in a future release"* — but
-  this IS the release. `training-file_refseq.icm` is required to run the pipeline and there
-  is currently no way for a user to obtain it. Either host it on Zenodo / a GitHub release
-  and add the URL to `setup_databases.sh` + the README, or document clearly where it comes
-  from so users can reproduce it themselves.
+- [x] **Glimmer training file — add a download source.**
+  File is bundled in `resources/training-file_refseq.icm`. `setup_databases.sh` copies it
+  to `DB_ROOT` automatically (step 5/5). README manual-setup table and the stale "future
+  release" note updated accordingly.
 
 ## Should fix
 
-- [ ] **Inconsistency between copy instruction and run command.**
-  The Configuration section tells users to `cp config.yml my_config.yml`, but every run
-  command still shows `-params-file config.yml`. Either drop the copy suggestion, or update
-  all run commands to use `-params-file my_config.yml`.
+- [x] **Inconsistency between copy instruction and run command.**
+  Dropped the copy suggestion — `config.yml` is the live config, users edit it directly.
+  Run commands already referenced `config.yml` and are unchanged.
 
-- [ ] **Add disk space estimate to the Database setup section.**
-  PHROGs + Pfam-A + ECOD are collectively ~15–20 GB. A single sentence saves users from
-  starting a multi-hour download and running out of quota on a cluster.
+- [x] **Add disk space estimate to the Database setup section.**
+  PHROGs ~155 MB, Pfam-A ~2.1 GB, ECOD ~4 GB → ~6.3 GB total. Added as a callout at
+  the top of the Database setup section.
 
-- [ ] **Pin HH-suite version in `environment.yml` and the Software versions table.**
-  Currently listed as *"latest via bioconda"*, which is not reproducible for a published
-  pipeline. Pin the version that was validated and reflect it in the README table.
+- [x] **Pin HH-suite version in `environment.yml` and the Software versions table.**
+  Pinned to `3.3.0` in `environment.yml`, `Dockerfile`, `phage_annotation.def`, and the
+  README Software versions table.
 
 ## Nice to have
 
-- [ ] **Add a Quick Start section** near the top — three commands (clone, setup DBs, run)
-  for users who already know Nextflow and just want the gist.
+- [x] **Add a Quick Start section** near the top — three commands (clone, setup DBs, run)
+  for users who already know Nextflow and just want the gist. Added after the title blurb,
+  before Overview.
 
-- [ ] **Add typical runtime / memory guidance.** HHsuite searches against Pfam/ECOD can be
-  memory-hungry. A note on expected wall time and memory requirements would help users size
-  their HPC job requests.
+- [x] **Add typical runtime / memory guidance.** Added "Resource requirements" section with
+  per-instance RAM for HHsuite steps, total CPU-hour scaling table (10/100/1k genomes),
+  peak RAM table for BUILD_ANNOTATION, and suggested job allocations.
+
+- [] **Clean everything up and create V2.** Make sure everything is publication-ready, finish all TODO's, start versioning again and replace the `main` branch with contents of `kc`

@@ -1,3 +1,15 @@
+/*
+ * MGG Annotation Pipeline
+ *
+ * Phage-oriented pipeline for high-confidence ORF prediction and functional
+ * annotation via PHROGs-enriched profile HMM searches (PHROGs, Pfam, ECOD).
+ * ORF prediction algorithm adapted from the Multiphage-2 tool.
+ *
+ * version : 1.0
+ * date    : 2026-04-16
+ * authors : Janusz Koszucki, Wanangwa Ndovie, Karol Ciuchcinski, Rafal Mostowy
+ */
+
 nextflow.enable.dsl=2
 
 // ---------------------

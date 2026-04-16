@@ -15,6 +15,9 @@ dependencies/scripts/annotation-jk.py
 .singularity.d/
 work/
 .nextflow/
+.nextflow.log*
 INPHARED
 output*/
 nextflow
+benchmark/data/sample_*/*.fasta
+benchmark/results/*

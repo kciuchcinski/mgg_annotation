@@ -2,6 +2,23 @@
 
 A Nextflow pipeline for annotating phage genomes using PHROGs-enriched profile HMM searches across multiple databases (PHROGs, PFAM, ECOD) for sensitive and precise functional annotation.
 
+## Quick Start
+
+```bash
+# 1. Clone and enter the repository
+git clone https://github.com/kciuchcinski/mgg_annotation.git
+cd mgg_annotation
+
+# 2. Download databases (~6.3 GB)
+bash setup_databases.sh /path/to/databases
+
+# 3. Set your paths in config.yml, then run
+#    (edit PHAGES_DIR, OUTPUT_DIR, and DB_ROOT at minimum)
+nextflow run main.nf -profile apptainer -params-file config.yml
+```
+
+See [Installation](#installation), [Database setup](#database-setup), and [Configuration](#configuration) for full details.
+
 ## Overview
 
 The pipeline takes phage genome assemblies (FASTA) as input and produces per-ORF functional annotations by:
@@ -108,6 +125,8 @@ Replace `/path/to/your/envs/phage_annotation` with the actual path (e.g. the out
 
 The pipeline requires three HHsuite-formatted profile databases, a Glimmer training file, and one metadata table. All paths are resolved relative to `DB_ROOT` (set in `config.yml`), but individual paths can be overridden.
 
+> **Disk space:** PHROGs ~155 MB · Pfam-A ~2.1 GB · ECOD ~4 GB — roughly **6.3 GB** total. Make sure `DB_ROOT` is on a filesystem with sufficient quota before running the setup script.
+
 ### Quick setup (recommended)
 
 Run the provided setup script to download and prepare all databases:
@@ -127,10 +146,10 @@ If you prefer to set up databases manually, download each one into `DB_ROOT`:
 | Database | Download | Target directory |
 |---|---|---|
 | PHROGs v4 | [phrogs_hhsuite_db.tar.gz](https://phrogs.lmge.uca.fr/downloads_from_website/phrogs_hhsuite_db.tar.gz) | `phrogs/` |
-| PHROGs metadata | [phrogs_table...tsv](https://phrogs.lmge.uca.fr/phrog_table/phrogs_table_almostfinal_plusGO_wNA_utf8.tsv) | `tables/phrog_annot_v4.tsv` |
+| PHROGs metadata | [phrogs_annot_v4.tsv](https://phrogs.lmge.uca.fr/downloads_from_website/phrog_annot_v4.tsv) | `tables/phrog_annot_v4.tsv` |
 | Pfam-A | [pfamA_35.0.tar.gz](https://wwwuser.gwdguser.de/~compbiol/data/hhsuite/databases/hhsuite_dbs/pfamA_35.0.tar.gz) | `pfam/` |
 | ECOD | [ecod.v294.F40.hhm_db.tar.gz](http://prodata.swmed.edu/ecod/distributions/ecod.v294.F40.hhm_db.tar.gz) | `ecod/` |
-| Glimmer ICM | *See note below* | `training-file_refseq.icm` |
+| Glimmer ICM | bundled in `resources/` (copied by setup script) | `training-file_refseq.icm` |
 
 After extraction, rename the versioned directories to their version-agnostic names (e.g. `pfamA_35.0/` to `pfam/`). The HHsuite database prefix inside each directory must also match the directory name (e.g. `pfam/pfam_a3m.ffdata`).
 
@@ -141,8 +160,6 @@ HHSUITE:
   PFAM: "/path/to/databases/pfamA_35.0/pfam"
   ECOD: "/path/to/databases/ECOD_F70_v294/ecod"
 ```
-
-> **Note:** The Glimmer training file (`training-file_refseq.icm`) must be placed in `DB_ROOT` manually for now. A download link will be provided in a future release.
 
 ### Expected directory layout
 
@@ -163,11 +180,7 @@ DB_ROOT/
 
 ## Configuration
 
-All user-configurable parameters are set in `config.yml`. Copy and edit the example before running:
-
-```bash
-cp config.yml my_config.yml
-```
+All user-configurable parameters are set in `config.yml`. Edit it directly before running.
 
 ### Minimal configuration
 
@@ -284,6 +297,58 @@ nextflow run main.nf -profile apptainer -params-file config.yml -resume
 
 Nextflow caches intermediate results in the `work/` directory. Do not delete it if you intend to resume.
 
+## Resource requirements
+
+Resource usage is dominated by two steps: HHsuite searches (CPU-bound, many parallel batches) and annotation building (RAM-bound, single process). The figures below were measured on an HPC cluster using the default `BATCH_SIZE=20` and `THREADS_PER_BATCH=4`.
+
+### HHsuite (search and enrichment)
+
+Each HHsuite batch runs independently and uses a fixed amount of memory regardless of dataset size:
+
+| Step | RAM per instance |
+|---|---|
+| `ENRICH_MSA_PHROGS` | ~2 GB |
+| `HHSUITE_SEARCH_BATCH` | ~4 GB |
+
+Total HHsuite compute scales with the number of protein clusters produced by MMseqs2:
+
+| Input genomes | Total HHsuite CPU-hours |
+|---|---|
+| 10 | ~18 h |
+| 100 | ~54 h |
+| 1 000 | ~566 h |
+
+Wall time depends on how many batches run in parallel. With `THREADS_PER_BATCH=4`, each batch slot needs 4 CPUs and ~4 GB RAM. Allocate CPUs and memory in multiples of that ratio.
+
+### Annotation building
+
+`BUILD_ANNOTATION` loads all hits and ORF sequences into a single in-memory table. Peak RAM scales with protein cluster diversity (not raw genome count) — highly redundant datasets benefit significantly from MMseqs2 clustering:
+
+| Input genomes | Peak RAM |
+|---|---|
+| 10 | ~10 GB |
+| 100 | ~35 GB |
+| 1 000 | ~130 GB |
+
+For large real-world phage collections (e.g. ~30 000 genomes from INPHARED), peak RAM was well under 400 GB due to high sequence redundancy converging the cluster count.
+
+### Suggested job allocation
+
+| Input size | CPUs | RAM |
+|---|---|---|
+| up to ~100 genomes | 16 | 64 GB |
+| up to ~1 000 genomes | 32 | 256 GB |
+| up to ~10 000 genomes | 64 | 400 GB |
+
+Set matching limits in `nextflow.config`:
+
+```groovy
+executor {
+    cpus   = 32
+    memory = '256 GB'
+}
+```
+
 ## Output
 
 Results are written to the directory specified by `OUTPUT_DIR`.
@@ -308,8 +373,8 @@ The containerized environment includes:
 |---|---|---|
 | Python | 3.11 | Pipeline scripts |
 | Biopython | 1.79 | Sequence I/O and GenBank export |
-| HH-suite | (latest via bioconda) | Profile-profile searches and MSA enrichment |
-| MMseqs2 | 13.45111 | Protein clustering |
+| HH-suite | 3.3.0 | Profile-profile searches and MSA enrichment |
+| MMseqs2 | 16.747c6 | Protein clustering |
 | Prodigal-gv | 2.11.0 | ORF prediction (viral/metagenomic) |
 | Glimmer | 3.02 | ORF prediction (trained model) |
 | Clustal Omega | 1.2.4 | Multiple sequence alignment |

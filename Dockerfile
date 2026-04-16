@@ -18,21 +18,21 @@ USER $MAMBA_USER
 RUN micromamba install -y -n base -c conda-forge -c bioconda \
         python=3.11 \
         biopython=1.79 \
-        pandas \
-        numpy \
+        pandas=3.0.2 \
+        numpy=2.4.4 \
         seaborn \
-        matplotlib \
-        hhsuite \
-        mmseqs2 \
+        matplotlib=3.10.8 \
+        hhsuite=3.3.0 \
+        mmseqs2=16.747c6 \
         clustalo=1.2.4 \
         bedtools=2.30.0 \
         glimmer=3.02 \
         prodigal-gv=2.11.0 \
-        ffindex \
+        ffindex=0.98 \
         pip && \
     micromamba run -n base pip install \
         phylotreelib \
-        csb && \
+        csb==1.2.5 && \
     micromamba clean --all --yes
 
 # Match the %environment section

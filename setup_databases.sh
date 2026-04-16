@@ -89,7 +89,7 @@ download_db() {
 }
 
 # ============================= PHROGs v4 ====================================
-echo "[1/4] PHROGs v4 (HHsuite database)"
+echo "[1/5] PHROGs v4 (HHsuite database)"
 download_db \
     "https://phrogs.lmge.uca.fr/downloads_from_website/phrogs_hhsuite_db.tar.gz" \
     "phrogs" \
@@ -97,7 +97,7 @@ download_db \
 echo ""
 
 # ============================= PHROGs metadata ==============================
-echo "[2/4] PHROGs annotation table"
+echo "[2/5] PHROGs annotation table"
 TABLES_DIR="$DB_ROOT/tables"
 mkdir -p "$TABLES_DIR"
 if [[ -f "$TABLES_DIR/phrog_annot_v4.tsv" ]]; then
@@ -105,13 +105,13 @@ if [[ -f "$TABLES_DIR/phrog_annot_v4.tsv" ]]; then
 else
     echo "  Downloading ..."
     wget -q --show-progress -O "$TABLES_DIR/phrog_annot_v4.tsv" \
-        "https://phrogs.lmge.uca.fr/phrog_table/phrogs_table_almostfinal_plusGO_wNA_utf8.tsv"
+        "https://phrogs.lmge.uca.fr/downloads_from_website/phrog_annot_v4.tsv"
     echo "  Done."
 fi
 echo ""
 
 # ============================= Pfam-A =======================================
-echo "[3/4] Pfam-A (HHsuite database)"
+echo "[3/5] Pfam-A (HHsuite database)"
 download_db \
     "https://wwwuser.gwdguser.de/~compbiol/data/hhsuite/databases/hhsuite_dbs/pfamA_35.0.tar.gz" \
     "pfam" \
@@ -119,7 +119,7 @@ download_db \
 echo ""
 
 # ============================= ECOD =========================================
-echo "[4/4] ECOD (HHsuite database)"
+echo "[4/5] ECOD (HHsuite database)"
 download_db \
     "http://prodata.swmed.edu/ecod/distributions/ecod.v294.F40.hhm_db.tar.gz" \
     "ecod" \
@@ -127,16 +127,21 @@ download_db \
 echo ""
 
 # ============================= Glimmer ICM ==================================
-# TODO: Add download URL for the Glimmer training file when available.
-#       For now, ensure training-file_refseq.icm is placed manually in DB_ROOT.
-if [[ -f "$DB_ROOT/training-file_refseq.icm" ]]; then
-    echo "[info] Glimmer training file found: $DB_ROOT/training-file_refseq.icm"
+echo "[5/5] Glimmer training file"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ICM_SRC="$SCRIPT_DIR/resources/training-file_refseq.icm"
+ICM_DST="$DB_ROOT/training-file_refseq.icm"
+
+if [[ -f "$ICM_DST" ]]; then
+    echo "  [skip] $ICM_DST already exists"
+elif [[ -f "$ICM_SRC" ]]; then
+    echo "  Copying from repository resources/ ..."
+    cp "$ICM_SRC" "$ICM_DST"
+    echo "  Done."
 else
-    echo "[warn] Glimmer training file not found at $DB_ROOT/training-file_refseq.icm"
-    echo "       Please place training-file_refseq.icm in $DB_ROOT manually."
-    # Placeholder for future automated download:
-    # wget -q --show-progress -O "$DB_ROOT/training-file_refseq.icm" \
-    #     "https://PLACEHOLDER_URL/training-file_refseq.icm"
+    echo "  [error] resources/training-file_refseq.icm not found in the repository."
+    echo "          Please re-clone the repository or place the file manually at:"
+    echo "          $ICM_DST"
 fi
 echo ""
 

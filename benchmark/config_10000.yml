@@ -1,0 +1,77 @@
+# ==========================================
+# BASIC CONFIGURATION
+# ==========================================
+
+# Input directory containing phage fasta files
+PHAGES_DIR: benchmark/data/sample_10000
+
+# File extension for input files
+INPUT_EXTENSION: fasta
+
+# Output directory for all results
+OUTPUT_DIR: benchmark/results/sample_10000
+
+# Database root directory (use absolute path)
+# NOTE: You can also set per-db overrides in the DATABASES section below
+DB_ROOT: /net/storage/pr3/plgrid/plggmgmcb/team/kciuchcinski/NEW_MGG_DATABASES
+
+# Minimum length for phages (bp)
+PHAGE_MIN_LENGTH: 2000
+
+# Enable to save the full raw hits table (search.tsv) to OUTPUT_DIR
+WRITE_SEARCH_TABLE: true
+
+# Enable to save the per-ORF annotation table (annotation.tsv) to OUTPUT_DIR
+WRITE_ANNOTATION_TABLE: true
+
+# Set how many functions per protein per database should be reported. We recommend 2.
+N_FUNCTIONS_PER_DB: 2
+
+# ==========================================
+# DATABASES
+# Default paths to databases are derived from DB_ROOT
+# You can uncomment the entries below to override specific database paths
+# ==========================================
+
+# # Path to glimmer training file (override if not in DB_ROOT)
+# GLIMMER_TRAIN: "/path/to/databases/training-file_refseq.icm"
+
+# # Paths to HHSuite databases (override if not using default directory names)
+# # Each path should point to the DB prefix (without file extensions)
+HHSUITE:
+  PHROGS: "/net/storage/pr3/plgrid/plggmgmcb/team/kciuchcinski/NEW_MGG_DATABASES/PHROGS_v4/phrogs"
+  PFAM: "/net/storage/pr3/plgrid/plggmgmcb/team/kciuchcinski/NEW_MGG_DATABASES/pfamA_32/pfam"
+  ECOD: "/net/storage/pr3/plgrid/plggmgmcb/team/kciuchcinski/NEW_MGG_DATABASES/ECOD_F70_20230309/ECOD_F70_20230309"
+
+# # Path to metadata annotation table (override if not using default location)
+# METADATA:
+#   PHROGS_TABLE: "/path/to/databases/tables/phrog_annot_v4.tsv"
+
+# ==========================================
+# ADVANCED CONFIGURATION
+# ==========================================
+
+# --- Annotation Filtering Thresholds ---
+ANNOTATION_FILTERS:
+  PHROGS:
+    MIN_PROB: 0.7
+    MIN_QCOV: 0.1
+    MIN_TCOV: 0.1
+  DOMAIN_DBS:   # ECOD, PFAM
+    MIN_PROB: 0.7
+    MIN_QCOV: 0.1
+    MIN_TCOV: 0.1
+
+# --- Clustering Parameters ---
+CLUSTERING:
+  IDENTITY: 0.5
+  COVERAGE: 0.8
+  EVAL: 0.001
+  SENSITIVITY: 7.5
+
+# --- Execution & Batching ---
+BATCH_SIZE: 20
+THREADS_PER_BATCH: 4
+SEARCH_TOOL: "hhblits_omp"
+ENRICH_CPUS: 4
+PARSING_CPUS: 16
