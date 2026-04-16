@@ -42,7 +42,7 @@ download_db() {
     fi
 
     echo "  Downloading $archive ..."
-    wget -q --show-progress -P "$DB_ROOT" "$url"
+    wget --no-check-certificate --progress=bar:force:noscroll -P "$DB_ROOT" "$url"
 
     echo "  Extracting ..."
     tar xzf "$DB_ROOT/$archive" -C "$DB_ROOT"
@@ -67,7 +67,10 @@ download_db() {
         # Move them into the target directory.
         echo "  Moving files into $target_dir/"
         mkdir -p "$DB_ROOT/$target_dir"
-        mv "$DB_ROOT"/${glob_prefix}* "$DB_ROOT/$target_dir/"
+        for f in "$DB_ROOT"/${glob_prefix}*; do
+            [[ "$f" == "$DB_ROOT/$target_dir" ]] && continue
+            mv "$f" "$DB_ROOT/$target_dir/"
+        done
     elif [[ "$extracted" != "$DB_ROOT/$target_dir" ]]; then
         echo "  Renaming $(basename "$extracted") -> $target_dir"
         mv "$extracted" "$DB_ROOT/$target_dir"
@@ -104,7 +107,7 @@ if [[ -f "$TABLES_DIR/phrog_annot_v4.tsv" ]]; then
     echo "  [skip] $TABLES_DIR/phrog_annot_v4.tsv already exists"
 else
     echo "  Downloading ..."
-    wget -q --show-progress -O "$TABLES_DIR/phrog_annot_v4.tsv" \
+    wget --no-check-certificate --progress=bar:force:noscroll -O "$TABLES_DIR/phrog_annot_v4.tsv" \
         "https://phrogs.lmge.uca.fr/downloads_from_website/phrog_annot_v4.tsv"
     echo "  Done."
 fi
