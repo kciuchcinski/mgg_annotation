@@ -23,9 +23,6 @@ from annotation_utils import (
     report_ecod,
 )
 
-# Hard-coded for now (as requested)
-MAX_WORKERS = 160
-
 # Tune this: larger blocks reduce overhead, smaller blocks reduce peak RAM per worker
 ROWS_PER_BLOCK = 250_000
 
@@ -153,6 +150,7 @@ def main():
     parser.add_argument("--write-annotation", required=True, help="Boolean flag: write annotation.tsv or not")
     parser.add_argument("--out-annotation-full", required=True, help="Full annotation table (with sequences)")
     parser.add_argument("--out-annotation-public", required=True, help="Public annotation table (no sequences)")
+    parser.add_argument("--workers", type=int, default=os.cpu_count(), help="Number of worker processes")
     args = parser.parse_args()
 
     write_annotation = str(args.write_annotation).lower() in {"1", "true", "yes", "y"}
@@ -187,7 +185,7 @@ def main():
         blocks = split_into_blocks_by_query(df, rows_per_block=ROWS_PER_BLOCK)
 
         best_parts = []
-        with ProcessPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        with ProcessPoolExecutor(max_workers=args.workers) as ex:
             futs = [ex.submit(process_block, b, args.nfunc2report) for b in blocks]
             for i, fut in enumerate(as_completed(futs), start=1):
                 part = fut.result()

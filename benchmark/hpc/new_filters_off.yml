@@ -1,0 +1,27 @@
+# NEW pipeline, run (i): hit filter disabled so that only the refactor (and the
+# intentional MSA-format change) separates it from the original.
+# Use the SAME database paths as original_config.yml.
+
+PHAGES_DIR: /EDIT/path/to/inputs
+OUTPUT_DIR: /EDIT/path/to/out/new_filters_off
+PUBLISH_INTERMEDIATES: true
+
+GLIMMER_TRAIN: /EDIT/path/to/Databases/Glimmer/training-file_refseq.icm
+HHSUITE:
+  PHROGS: /EDIT/path/to/Databases/hhsuite/phrogs_hhsuite_db/phrogs
+  PFAM:   /EDIT/path/to/Databases/hhsuite/pfamA_32/pfam
+  ECOD:   /EDIT/path/to/Databases/hhsuite/ECOD_F70_20200207/ECOD_F70_20200207
+METADATA:
+  # the table shipped with the original repository
+  PHROGS_TABLE: /EDIT/path/to/mgg_annotation/dependencies/tables/phrog_annot_v4.tsv
+
+N_FUNCTIONS_PER_DB: 2
+ANNOTATION_FILTERS:
+  PHROGS:
+    MIN_PROB: 0
+    MIN_QCOV: 0
+    MIN_TCOV: 0
+  DOMAIN_DBS:
+    MIN_PROB: 0
+    MIN_QCOV: 0
+    MIN_TCOV: 0
