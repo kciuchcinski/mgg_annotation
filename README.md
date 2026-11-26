@@ -2,20 +2,29 @@
 
 A Nextflow pipeline for annotating phage genomes using PHROGs-enriched profile HMM searches across multiple databases (PHROGs, PFAM, ECOD) for sensitive and precise functional annotation.
 
-## Quick Start
+## Quick Start (macOS, Apple Silicon or Intel)
+
+You need [Homebrew](https://brew.sh), [Docker Desktop](https://www.docker.com/products/docker-desktop/) and ~30 GB of free disk space.
 
 ```bash
-# 1. Clone and enter the repository
+# 1. Install Nextflow (Homebrew installs a suitable Java automatically)
+brew install nextflow
+
+# 2. Start Docker Desktop, then build the pipeline image (native on Apple Silicon, ~2 min)
 git clone https://github.com/kciuchcinski/mgg_annotation.git
 cd mgg_annotation
+docker build -t phage_annotation:latest .
 
-# 2. Download databases (~6.3 GB)
-bash setup_databases.sh /path/to/databases
+# 3. Download the databases into ./databases (~6.5 GB download, ~25 GB unpacked)
+./setup_databases.sh databases
 
-# 3. Set your paths in config.yml, then run
-#    (edit PHAGES_DIR, OUTPUT_DIR, and DB_ROOT at minimum)
-nextflow run main.nf -profile apptainer -params-file config.yml
+# 4. Run on the bundled test genomes (~10 min on a MacBook), results in test/output/
+nextflow run main.nf -params-file test/config.yml
 ```
+
+To annotate your own genomes, edit `PHAGES_DIR` and `OUTPUT_DIR` in `config.yml` and run `nextflow run main.nf -params-file config.yml`. No `-profile` is needed: Docker is the default.
+
+Linux workstations use the same steps (install Nextflow from [nextflow.io](https://www.nextflow.io/docs/latest/install.html) and Docker Engine). For HPC clusters with Apptainer see [Option B](#3-set-up-the-execution-environment).
 
 See [Installation](#installation), [Database setup](#database-setup), and [Configuration](#configuration) for full details.
 
@@ -23,7 +32,7 @@ See [Installation](#installation), [Database setup](#database-setup), and [Confi
 
 The pipeline takes phage genome assemblies (FASTA) as input and produces per-ORF functional annotations by:
 
-1. **Preprocessing** — validates input genomes and filters by minimum length.
+1. **Preprocessing** — validates input genomes and filters by minimum length. Files are skipped (and listed in `dropped_inputs.tsv`) if they hold more than one sequence or are shorter than `PHAGE_MIN_LENGTH`.
 2. **ORF calling** — predicts open reading frames using both Prodigal-gv (meta mode) and Glimmer3, then reconciles predictions.
 3. **Protein clustering** — clusters translated ORFs with MMseqs2 to reduce redundancy and generate multiple sequence alignments (MSAs).
 4. **MSA enrichment** — enriches MSAs against the PHROGs database using HHblits to improve search sensitivity.
@@ -32,24 +41,33 @@ The pipeline takes phage genome assemblies (FASTA) as input and produces per-ORF
 
 ## Requirements
 
-- **OS**: Linux (recommended) or macOS
-- **Nextflow** ≥ 22.10 (requires Java 11+)
+- **OS**: macOS (Apple Silicon or Intel) or Linux
+- **Nextflow** ≥ 25.04 (requires Java 17+; `brew install nextflow` takes care of both)
 - **Container runtime** (one of):
-  - [Apptainer](https://apptainer.org/) ≥ 1.1 — recommended for HPC / Linux
-  - [Docker](https://www.docker.com/) — recommended for macOS / local workstations
-  - [Conda](https://docs.conda.io/) / [Micromamba](https://mamba.readthedocs.io/) — fallback if containers are not available
+  - [Docker](https://www.docker.com/) — default; recommended for macOS and Linux workstations
+  - [Apptainer](https://apptainer.org/) ≥ 1.1 — recommended for HPC
+  - [Conda](https://docs.conda.io/) / [Micromamba](https://mamba.readthedocs.io/) — Linux x86_64 only (Glimmer has no macOS / ARM conda build)
+- **Disk**: ~30 GB for the databases, plus space for `work/` during a run
 
 ## Installation
 
 ### 1. Install Nextflow
 
+On macOS:
+
+```bash
+brew install nextflow
+```
+
+On Linux (needs Java 17 or newer):
+
 ```bash
 curl -s https://get.nextflow.io | bash
 chmod +x nextflow
-mv nextflow ~/.local/bin/   # or any directory on your $PATH
+mkdir -p ~/.local/bin && mv nextflow ~/.local/bin/   # make sure ~/.local/bin is on your $PATH
 ```
 
-See the [official Nextflow docs](https://www.nextflow.io/docs/latest/install.html) for alternative installation methods and Java requirements.
+See the [official Nextflow docs](https://www.nextflow.io/docs/latest/install.html) for other installation methods.
 
 ### 2. Clone the repository
 
@@ -62,8 +80,23 @@ cd mgg_annotation
 
 Choose **one** of the three options below.
 
+<details open>
+<summary><strong>Option A — Docker (default; macOS and Linux workstations)</strong></summary>
+
+Start Docker Desktop (macOS) or the Docker daemon (Linux), then build the image:
+
+```bash
+docker build -t phage_annotation:latest .
+```
+
+The image builds natively for the machine it is built on (`arm64` on Apple Silicon, `amd64` on Intel/AMD), so no emulation is involved.
+
+**Memory:** the pipeline uses at most `MAX_MEMORY` (default `7 GB`) and `MAX_CPUS` (default `8`) at once. Docker Desktop must have at least that much memory (Settings → Resources → Memory; the default on most Macs is 8 GB). On a larger machine raise both in `config.yml` together with Docker Desktop's limits, e.g. `MAX_CPUS: 12` and `MAX_MEMORY: '24 GB'`.
+
+</details>
+
 <details>
-<summary><strong>Option A — Apptainer (recommended for HPC / Linux)</strong></summary>
+<summary><strong>Option B — Apptainer (HPC)</strong></summary>
 
 Build the Apptainer image from the provided definition file:
 
@@ -71,27 +104,12 @@ Build the Apptainer image from the provided definition file:
 apptainer build phage_annotation.sif phage_annotation.def
 ```
 
-The resulting `.sif` file must be in the pipeline root directory (or update the `container` path in `nextflow.config`). Host paths (including `DB_ROOT`) are mounted automatically via `autoMounts`.
+The resulting `.sif` file must be in the pipeline root directory (or update the `container` path in `nextflow.config`). Host paths (including `DB_ROOT`) are mounted automatically via `autoMounts`. Run with `-profile apptainer`.
 
 </details>
 
 <details>
-<summary><strong>Option B — Docker (recommended for macOS)</strong></summary>
-
-Build the Docker image:
-
-```bash
-docker build --platform=linux/amd64 -t phage_annotation:latest .
-```
-
-> **Note:** On Apple Silicon Macs, the `--platform=linux/amd64` flag is required because several bioinformatics tools lack native ARM builds.
-
-Make sure Docker Desktop is running before launching the pipeline.
-
-</details>
-
-<details>
-<summary><strong>Option C — Conda / Micromamba (fallback)</strong></summary>
+<summary><strong>Option C — Conda / Micromamba (Linux x86_64 only)</strong></summary>
 
 Create the environment from the provided YAML file:
 
@@ -117,15 +135,15 @@ conda {
 }
 ```
 
-Replace `/path/to/your/envs/phage_annotation` with the actual path (e.g. the output of `micromamba env list` or `conda env list`). If using Micromamba, ensure `useMicromamba = true` is set in `nextflow.config`.
+Replace `/path/to/your/envs/phage_annotation` with the actual path (e.g. the output of `micromamba env list` or `conda env list`). If using Micromamba, ensure `useMicromamba = true` is set in `nextflow.config`. Run with `-profile conda`.
 
 </details>
 
 ## Database setup
 
-The pipeline requires three HHsuite-formatted profile databases, a Glimmer training file, and one metadata table. All paths are resolved relative to `DB_ROOT` (set in `config.yml`), but individual paths can be overridden.
+The pipeline requires three HHsuite-formatted profile databases, a Glimmer training file, and one metadata table. All paths are resolved relative to `DB_ROOT` (set in `config.yml`; a relative `DB_ROOT` is taken from the directory you launch Nextflow in), but individual paths can be overridden. The pipeline checks that all databases exist before it starts.
 
-> **Disk space:** PHROGs ~155 MB · Pfam-A ~2.1 GB · ECOD ~4 GB — roughly **6.3 GB** total. Make sure `DB_ROOT` is on a filesystem with sufficient quota before running the setup script.
+> **Disk space:** the downloads are PHROGs ~0.16 GB · Pfam-A ~2.25 GB · ECOD ~4.2 GB (~6.5 GB), but unpacked they take **~25 GB** (Pfam ~5.5 GB, ECOD ~12.6 GB of `ffdata` alone). The setup script checks for ~30 GB of free space before it starts.
 
 ### Quick setup (recommended)
 
@@ -135,7 +153,7 @@ Run the provided setup script to download and prepare all databases:
 bash setup_databases.sh /path/to/databases
 ```
 
-The script downloads each database, extracts it, and renames directories to the version-agnostic paths expected by the pipeline defaults. Existing databases are skipped, so the script is safe to re-run.
+The script downloads each database, extracts it, and renames directories to the version-agnostic paths expected by the pipeline defaults. It works with the tools that ship with macOS (`curl`) and Linux (`curl` or `wget`). Existing databases are skipped and interrupted downloads resume, so the script is safe to re-run.
 
 After completion, set `DB_ROOT` in `config.yml` to the path you provided.
 
@@ -184,7 +202,7 @@ All user-configurable parameters are set in `config.yml`. Edit it directly befor
 
 ### Minimal configuration
 
-You only need to set three paths:
+Every parameter has a default (see `nextflow.config`), so you only need to set three paths:
 
 ```yaml
 # Input directory containing phage .fasta files
@@ -203,14 +221,15 @@ DB_ROOT: /path/to/databases
 
 | Parameter | Default | Description |
 |---|---|---|
-| `PHAGES_DIR` | `test/data/` | Directory containing input FASTA files |
+| `PHAGES_DIR` | `test/data` | Directory containing input FASTA files (one genome per file) |
 | `INPUT_EXTENSION` | `fasta` | File extension to look for in `PHAGES_DIR` |
-| `OUTPUT_DIR` | `test/output` | Directory for pipeline outputs |
-| `DB_ROOT` | `databases/` | Root directory for all databases |
+| `OUTPUT_DIR` | `results` | Directory for pipeline outputs |
+| `DB_ROOT` | `databases` (in the pipeline directory) | Root directory for all databases |
 | `PHAGE_MIN_LENGTH` | `2000` | Minimum genome length in bp to process |
 | `WRITE_SEARCH_TABLE` | `true` | Write raw HHsuite hits to `search.tsv` |
 | `WRITE_ANNOTATION_TABLE` | `true` | Write per-ORF annotation to `annotation.tsv` |
 | `N_FUNCTIONS_PER_DB` | `2` | Max number of functions reported per protein per database |
+| `PUBLISH_INTERMEDIATES` | `false` | Also copy intermediate files (ORF tables, proteins, clusters, MSAs, HHR files) to `OUTPUT_DIR/intermediates/` |
 
 #### Annotation filtering thresholds
 
@@ -244,13 +263,15 @@ Controls MMseqs2 protein clustering behavior.
 | `THREADS_PER_BATCH` | `4` | CPU threads allocated per HHsuite search task |
 | `SEARCH_TOOL` | `hhblits_omp` | HHsuite search binary (`hhblits_omp` or `hhblits`) |
 | `ENRICH_CPUS` | `4` | CPU threads for the PHROGs enrichment step |
-| `PARSING_CPUS` | `16` | CPU threads for hit collection and annotation parsing |
+| `PARSING_CPUS` | `4` | CPU threads for clustering, MSA preparation, hit collection and annotation building |
+| `MAX_CPUS` | `8` | Docker profile: total CPUs the pipeline may use at once (also caps every task) |
+| `MAX_MEMORY` | `7 GB` | Docker profile: total memory the pipeline may use at once (also caps every task) |
 
-> **Note:** These parameters control CPU allocation per process, not the total resources available to the pipeline. See the section below on how to set the global resource pool.
+> **Note:** The per-process parameters control CPU allocation per task. `MAX_CPUS` / `MAX_MEMORY` set the global pool for the default Docker profile; for other profiles see the section below.
 
 #### Resource limits
 
-By default, Nextflow uses the **local executor**, which runs all tasks on the current machine. You can cap the total resources it may use by adding an `executor` block to `nextflow.config`:
+Nextflow uses the **local executor**, which runs all tasks on the current machine. With the default Docker profile the pool is set by `MAX_CPUS` and `MAX_MEMORY`. For the `apptainer` profile it is set to 64 CPUs / 256 GB in `nextflow.config`; change it by editing the `executor` block there:
 
 ```groovy
 executor {
@@ -274,16 +295,14 @@ See the [Nextflow executors documentation](https://www.nextflow.io/docs/latest/e
 
 ## Running the pipeline
 
-Select the profile matching your execution environment:
-
 ```bash
-# Apptainer (HPC / Linux)
+# Docker (default; macOS / Linux workstations)
+nextflow run main.nf -params-file config.yml
+
+# Apptainer (HPC)
 nextflow run main.nf -profile apptainer -params-file config.yml
 
-# Docker (macOS / local)
-nextflow run main.nf -profile docker -params-file config.yml
-
-# Conda
+# Conda (Linux x86_64)
 nextflow run main.nf -profile conda -params-file config.yml
 ```
 
@@ -292,7 +311,7 @@ nextflow run main.nf -profile conda -params-file config.yml
 If a run fails or is interrupted, relaunch with `-resume` to restart from the last successful step:
 
 ```bash
-nextflow run main.nf -profile apptainer -params-file config.yml -resume
+nextflow run main.nf -params-file config.yml -resume
 ```
 
 Nextflow caches intermediate results in the `work/` directory. Do not delete it if you intend to resume.
@@ -314,9 +333,9 @@ Total HHsuite compute scales with the number of protein clusters produced by MMs
 
 | Input genomes | Total HHsuite CPU-hours |
 |---|---|
-| 10 | ~18 h |
-| 100 | ~54 h |
-| 1 000 | ~566 h |
+| 10 | ~0.8 h |
+| 100 | ~12 h |
+| 1 000 | ~67 h |
 
 Wall time depends on how many batches run in parallel. With `THREADS_PER_BATCH=4`, each batch slot needs 4 CPUs and ~4 GB RAM. Allocate CPUs and memory in multiples of that ratio.
 
@@ -329,6 +348,8 @@ Wall time depends on how many batches run in parallel. With `THREADS_PER_BATCH=4
 | 10 | ~10 GB |
 | 100 | ~35 GB |
 | 1 000 | ~130 GB |
+
+> These peaks were measured when `BUILD_ANNOTATION` and `COLLECT_HITS` always started 160 worker processes. They now start `PARSING_CPUS` workers, which needs much less memory on small machines.
 
 For large real-world phage collections (e.g. ~30 000 genomes from INPHARED), peak RAM was well under 400 GB due to high sequence redundancy converging the cluster count.
 
@@ -357,13 +378,19 @@ Results are written to the directory specified by `OUTPUT_DIR`.
 |---|---|
 | `annotation.tsv` | Per-ORF annotation table with top hits from each database |
 | `report.tsv` | Filtered hits passing the probability and coverage thresholds |
+| `dropped_inputs.tsv` | Input files that were skipped, with the reason (multi-record FASTA, too short, empty) |
 | `search.tsv` | Full unfiltered hits table (if `WRITE_SEARCH_TABLE` is enabled) |
 | `PCs2proteins.tsv` | Mapping of protein clusters (PCs) to individual protein IDs |
 | `genbanks/<GENOME_ID>.gb` | GenBank-formatted files with annotated features for each input genome |
 
 ### Intermediate files
 
-Nextflow stores intermediate files in the `work/` directory. This directory can grow large and may be safely deleted after a successful run.
+Nextflow stores intermediate files in the `work/` directory. This directory can grow large and may be safely deleted after a successful run. Set `PUBLISH_INTERMEDIATES: true` to also copy the main intermediate files to `OUTPUT_DIR/intermediates/`, using the same folder names as the original Snakemake pipeline.
+
+## Known issues
+
+- **ECOD annotations with the database from `setup_databases.sh`.** The script downloads ECOD v294 F40, whose profile names look like `3520895|A0A077YYV3_F1_nD5|1075.4.1.9`. The ECOD annotation code expects the HHpred ECOD_F70 name format (`... | X: ..., H: ..., T: ..., F: ...`). With v294 F40 every hit gets X-group `-` and its raw ID as the "function", so only one ECOD hit is kept per cluster and the label is not human-readable. Use the HHpred ECOD_F70 database (set `HHSUITE.ECOD`) if you need ECOD functions.
+- **Pfam version.** `setup_databases.sh` downloads Pfam-A 35.0; the original MGG pipeline used Pfam-A 32.0.
 
 ## Software versions
 
@@ -376,10 +403,9 @@ The containerized environment includes:
 | HH-suite | 3.3.0 | Profile-profile searches and MSA enrichment |
 | MMseqs2 | 16.747c6 | Protein clustering |
 | Prodigal-gv | 2.11.0 | ORF prediction (viral/metagenomic) |
-| Glimmer | 3.02 | ORF prediction (trained model) |
-| Clustal Omega | 1.2.4 | Multiple sequence alignment |
-| BEDTools | 2.30.0 | Genomic interval operations |
-| FFindex | (latest via bioconda) | Flat-file index operations for HHsuite |
+| Glimmer | 3.02 | ORF prediction (trained model); compiled from source in the Docker image |
+| csb | 1.2.5 | HHR parsing |
+| pandas / NumPy | 3.0.2 / 2.4.4 | Tables |
 
 ## Citation
 

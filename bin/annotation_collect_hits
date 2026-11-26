@@ -16,7 +16,6 @@ from itertools import islice
 from pathlib import Path
 
 # Configuration for high-performance execution
-MAX_WORKERS = 160
 BATCH_SIZE = 2000  # Number of files per worker task
 
 def get_phrog(row):
@@ -65,7 +64,8 @@ def process_batch(file_paths, dbname):
     ]
     
     rows = []
-    
+    failed = []
+
     for fpath in file_paths:
         try:
             # We catch all exceptions to prevent one bad file from killing the worker
@@ -90,12 +90,12 @@ def process_batch(file_paths, dbname):
                     hit.name,
                 ])
         except Exception:
-            # Silently skip corrupted files in high-throughput mode 
-            # or print to stderr if critical debugging is needed
+            # Don't let one bad file kill the worker; report it in main()
+            failed.append(fpath)
             continue
 
     if not rows:
-        return dbname, None
+        return dbname, None, failed
 
     # Create DataFrame in the worker to distribute CPU load of creation/calc
     df = pd.DataFrame(rows, columns=colnames)
@@ -113,7 +113,7 @@ def process_batch(file_paths, dbname):
         'evalue', 'db', 'name'
     ]
     
-    return dbname, df[colfinal]
+    return dbname, df[colfinal], failed
 
 def main():
     parser = argparse.ArgumentParser(
@@ -126,6 +126,7 @@ def main():
     parser.add_argument("--phrogs-table", required=True, help="PHROGS metadata table (TSV)")
     parser.add_argument("--write-search", required=True, help="Boolean flag: write search.tsv or not")
     parser.add_argument("--out-search", required=True, help="Output path for search.tsv")
+    parser.add_argument("--workers", type=int, default=os.cpu_count(), help="Number of worker processes")
 
     args = parser.parse_args()
 
@@ -144,9 +145,10 @@ def main():
         "ECOD": []
     }
 
-    print(f"Starting parallel processing with {MAX_WORKERS} CPUs...", flush=True)
-    
-    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    print(f"Starting parallel processing with {args.workers} CPUs...", flush=True)
+    failed_files = []
+
+    with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = []
         
         # Submit tasks
@@ -169,7 +171,8 @@ def main():
         
         for future in as_completed(futures):
             try:
-                dbname, df_chunk = future.result()
+                dbname, df_chunk, failed = future.result()
+                failed_files.extend(failed)
                 if df_chunk is not None and not df_chunk.empty:
                     results_map[dbname].append(df_chunk)
             except Exception as e:
@@ -178,6 +181,11 @@ def main():
             completed_count += 1
             if completed_count % 500 == 0:
                 print(f"Progress: {completed_count}/{total_futures} batches processed...", flush=True)
+
+    if failed_files:
+        print(f"WARNING: {len(failed_files)} HHR file(s) could not be parsed and were skipped, e.g.:", file=sys.stderr)
+        for f in sorted(failed_files)[:10]:
+            print(f"  {f}", file=sys.stderr)
 
     print("Aggregating results...", flush=True)
     
@@ -198,7 +206,7 @@ def main():
 
     # Load Metadata (same logic as original)
     print("Loading PHROGS metadata...", flush=True)
-    phrogs_annot_df = pd.read_csv(args.phrogs_table, sep="\\t")
+    phrogs_annot_df = pd.read_csv(args.phrogs_table, sep="\t")
     phrogs_annot_df = phrogs_annot_df[
         ["phrog", "color", "annot", "category"]
     ].fillna("unknown function")
@@ -218,7 +226,7 @@ def main():
     if df.empty:
         print("No hits found, writing empty search.tsv.", flush=True)
         Path(args.out_search).parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(args.out_search, sep="\\t", index=False)
+        df.to_csv(args.out_search, sep="\t", index=False)
         return
 
     # Post-processing
@@ -226,13 +234,12 @@ def main():
     ).fillna("0")
     df["phrog"] = df["phrog"].astype(int, errors="ignore")
 
-    # Sorting
-    try:
-        df["tmp"] = df["query"].str.strip("PC").astype(int, errors="ignore")
-        df = df.sort_values("tmp", ascending=True).drop(columns=["tmp"])
-    except Exception:
-        # Fallback if query format is unexpected
-        pass
+    # Deterministic sorting: PC number, then DB (original order), then hit
+    df["tmp_pc"] = pd.to_numeric(df["query"].str.removeprefix("PC"), errors="coerce")
+    df["tmp_db"] = df["db"].map({"PHROGS": 0, "PFAM": 1, "ECOD": 2})
+    df = df.sort_values(
+        ["tmp_pc", "query", "tmp_db", "target", "qstart", "tstart"], kind="mergesort"
+    ).drop(columns=["tmp_pc", "tmp_db"])
 
     print(f"Writing search table to {args.out_search} ...", end=" ", flush=True)
     Path(args.out_search).parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,31 @@
+# Reference run of the ORIGINAL pipeline (mgg_annotation, branch prodigal-gv @ 66ba474).
+# Fill in the four HPC paths marked EDIT, then see run_reference.sh.
+#
+# Choices that make the comparison fair:
+#   - SEARCH_TOOL: hhblits  -> same iterations as the new pipeline (PHROGS 1, PFAM 2, ECOD 2)
+#   - the same database files are given to the new pipeline (new_*.yml)
+#   - ALANDB is required by the original (it only runs with all four DBs); it is ignored in the comparison
+
+PHAGES_DIR: /EDIT/path/to/inputs          # EDIT: directory with one-genome .fasta files
+OUTPUT_DIR: /EDIT/path/to/out/original    # EDIT
+INPUT_EXTENSION: fasta
+PHAGE_MIN_LENGTH: 2000
+GLIMMER_TRAIN: /EDIT/path/to/Databases/Glimmer/training-file_refseq.icm
+SEARCH_TOOL: hhblits
+
+CLUSTERING:
+  IDENTITY: 0.5
+  COVERAGE: 0.8
+  EVAL: 0.001
+  SENSITIVITY: 7.5
+
+HHSUITE:
+  PHROGS: /EDIT/path/to/Databases/hhsuite/phrogs_hhsuite_db/phrogs
+  PFAM:   /EDIT/path/to/Databases/hhsuite/pfamA_32/pfam
+  ECOD:   /EDIT/path/to/Databases/hhsuite/ECOD_F70_20200207/ECOD_F70_20200207
+  ALANDB: /EDIT/path/to/Databases/AlanDavidson/profile-db/all_proteins
+
+METADATA:
+  PHROGS_TABLE: dependencies/tables/phrog_annot_v4.tsv
+  MGG_PHROGS_TABLE: dependencies/tables/v3_phrogs-table-rafal-3_12.csv
+  ALAN_TABLE: dependencies/tables/alan_annot.tsv

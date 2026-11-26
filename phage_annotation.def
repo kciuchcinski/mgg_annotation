@@ -1,31 +1,20 @@
 Bootstrap: docker
-From: mambaorg/micromamba:latest
+From: mambaorg/micromamba:2.9.0-debian13
 
 %post
     apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*
-    # Install all conda packages from specified channels
-    micromamba install -y -n base -c defaults -c bioconda -c conda-forge \
+    # Keep in sync with environment.yml and Dockerfile
+    micromamba install -y -n base -c conda-forge -c bioconda \
         python=3.11 \
         biopython=1.79 \
         pandas=3.0.2 \
         numpy=2.4.4 \
-        seaborn \
-        matplotlib=3.10.8 \
         hhsuite=3.3.0 \
         mmseqs2=16.747c6 \
-        clustalo=1.2.4 \
-        bedtools=2.30.0 \
         glimmer=3.02 \
         prodigal-gv=2.11.0 \
-        ffindex=0.98 \
         pip && \
-
-    # Use 'micromamba run' to ensure pip is executed from within the 'base' environment
-    micromamba run -n base pip install \
-        phylotreelib \
-        csb==1.2.5 && \
-
-    # Clean up caches to reduce image size
+    micromamba run -n base pip install --no-cache-dir csb==1.2.5 && \
     micromamba clean --all --yes
 
 %environment

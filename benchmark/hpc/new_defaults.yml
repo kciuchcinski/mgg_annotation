@@ -1,0 +1,18 @@
+# NEW pipeline, run (ii): shipped defaults (hit filter on), to show the effect of the
+# intentional changes on the same inputs and databases.
+# Use the SAME database paths as original_config.yml.
+
+PHAGES_DIR: /EDIT/path/to/inputs
+OUTPUT_DIR: /EDIT/path/to/out/new_defaults
+PUBLISH_INTERMEDIATES: true
+
+GLIMMER_TRAIN: /EDIT/path/to/Databases/Glimmer/training-file_refseq.icm
+HHSUITE:
+  PHROGS: /EDIT/path/to/Databases/hhsuite/phrogs_hhsuite_db/phrogs
+  PFAM:   /EDIT/path/to/Databases/hhsuite/pfamA_32/pfam
+  ECOD:   /EDIT/path/to/Databases/hhsuite/ECOD_F70_20200207/ECOD_F70_20200207
+METADATA:
+  # the table shipped with the original repository
+  PHROGS_TABLE: /EDIT/path/to/mgg_annotation/dependencies/tables/phrog_annot_v4.tsv
+
+N_FUNCTIONS_PER_DB: 2

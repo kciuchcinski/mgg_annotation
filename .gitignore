@@ -3,7 +3,6 @@ test/output
 .snakemake
 nohup.out
 bin/__pycache__
-test/
 databases/
 cyanophages/
 sftp-config.json
