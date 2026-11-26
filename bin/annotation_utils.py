@@ -1,5 +1,10 @@
+import re
+
 import pandas as pd
 import numpy as np
+
+# ECOD X-group name: everything between "X: " and the ", H: " that follows it
+_ECOD_X_RE = re.compile(r"\bX: (.*?), H: ")
 
 def get_phrog(row):
     """ get phrog cluster """
@@ -105,23 +110,15 @@ def get_ecod_x(row):
     Extract ECOD X-level from the 'name' field.
 
     Example ECOD name (generic):
-      A|FXXXX|...|X: X-group-id, H: ..., T: ..., F: ...
+      ...|...|...|A: <A name>, X: <X name>, H: <H name>, T: <T name>, F: <F name>
 
-    This function should return the X-group identifier as a string.
+    Returns the full X-group name (e.g. "CCHC-type 1 zinc finger"), or "-"
+    if the name has no X level. The X name can contain spaces and commas,
+    so it is taken up to the ", H: " delimiter rather than split on words.
     """
     name = str(row.get("name", ""))
-    try:
-        parts = name.split("|")
-        # parts[3] is usually the hierarchical annotation text
-        levels = parts[3].split(": ")
-        # "... X: <X-ID>, H: ..."  -> pick the X element
-        # levels[2] should contain something like "X: <X-ID>, H"
-        x_part = levels[2]          # e.g. "X: 1234, H"
-        x_id = x_part.split(",")[0] # "X: 1234"
-        x_id = x_id.split()[-1]     # "1234"
-        return x_id
-    except Exception:
-        return "-"
+    m = _ECOD_X_RE.search(name)
+    return m.group(1).strip() if m else "-"
         
 def report_ecod(df, nfunc2report=1, verbose=True):
     """
@@ -205,6 +202,10 @@ def report_pfam(df, nfunc2report=1, verbose=False):
     informative_df = df2[~is_duf].sort_values('bits', ascending=False)
     noninformative_df = df2[is_duf].sort_values('bits', ascending=False)
     df_sorted = pd.concat([informative_df, noninformative_df], ignore_index=True)
+    # One row per Pfam family: HHblits reports alternative alignments of the same
+    # template (-alt), and repeated domains hit the same family more than once.
+    # Keep the best-scoring alignment of each family.
+    df_sorted = df_sorted.drop_duplicates(subset="target", keep="first").reset_index(drop=True)
 
     if df_sorted.empty:
         top_hits_df = get_no_hit_row(nfunc2report)
@@ -242,7 +243,7 @@ def report_pfam(df, nfunc2report=1, verbose=False):
 
 def get_no_hit_frames(pcid, nfunc2report):
     dfs = []
-    db_names = ['PHROGS', 'ALAN', 'PFAM', 'ECOD']
+    db_names = ['PHROGS', 'PFAM', 'ECOD']
     for db in db_names:
         df = get_no_hit_row(nfunc2report)
         df['query'] = pcid

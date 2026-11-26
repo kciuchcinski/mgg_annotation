@@ -6,6 +6,7 @@ Optimized for large report.tsv (vectorized ops + multiprocessing by query blocks
 
 import sys
 import os
+import re
 from pathlib import Path
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -18,7 +19,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from annotation_utils import (
     get_no_hit_frames,
     report_phrogs,
-    report_alan,
     report_pfam,
     report_ecod,
 )
@@ -69,11 +69,15 @@ def add_significance_column_fast(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def label_sort_key(col: str):
+    """Sort 'ECOD2_bits' before 'ECOD10_bits' (by DB name, then rank as a number)."""
+    m = re.match(r"([A-Za-z]+)(\d+)_", col)
+    return (m.group(1), int(m.group(2)), col) if m else (col, 0, col)
+
+
 def report_db(dbid, df, nfunc2report, verbose=False):
     if dbid == "PHROGS":
         return report_phrogs(df, max_evalue=10**-3, nfunc2report=nfunc2report, verbose=verbose)
-    elif dbid == "ALANDB":
-        return report_alan(df, min_prob=0.95, nfunc2report=nfunc2report, verbose=verbose)
     elif dbid == "PFAM":
         return report_pfam(df, nfunc2report=nfunc2report, verbose=verbose)
     elif dbid == "ECOD":
@@ -115,7 +119,7 @@ def process_block(block_df: pd.DataFrame, nfunc2report: int) -> pd.DataFrame:
 
     # Keep groupby overhead smaller
     for pcid, pc in block_df.groupby("query", sort=False, observed=True):
-        phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b = get_no_hit_frames(pcid, nfunc2report)
+        phrogs_df_b, pfam_df_b, ecod_df_b = get_no_hit_frames(pcid, nfunc2report)
 
         for dbid, db in pc.groupby("db", sort=False, observed=True):
             if db.empty:
@@ -126,14 +130,12 @@ def process_block(block_df: pd.DataFrame, nfunc2report: int) -> pd.DataFrame:
 
             if dbid == "PHROGS":
                 phrogs_df_b = db_best
-            elif dbid == "ALANDB":
-                alan_df_b = db_best
             elif dbid == "PFAM":
                 pfam_df_b = db_best
             elif dbid == "ECOD":
                 ecod_df_b = db_best
 
-        out.extend([phrogs_df_b, alan_df_b, pfam_df_b, ecod_df_b])
+        out.extend([phrogs_df_b, pfam_df_b, ecod_df_b])
 
     if not out:
         return pd.DataFrame()
@@ -235,7 +237,7 @@ def main():
     print("Done!", flush=True)
 
     print("Loading ORF and PC tables... ", end="", flush=True)
-    orfs_df = pd.read_csv(args.confident, low_memory=False)
+    orfs_df = pd.read_csv(args.confident, dtype={"contigID": str, "proteinID": str}, low_memory=False)
     pcs2proteins_df = pd.read_csv(args.pcs2proteins, sep="\t", usecols=[0, 1], low_memory=False)
     print("Done!", flush=True)
 
@@ -244,10 +246,10 @@ def main():
     orfs_df = orfs_df.merge(report_df, on="PC", how="left")
     print("Done!", flush=True)
 
-    func_cols = sorted(c for c in orfs_df.columns if c.endswith("_function"))
-    sig_cols = sorted(c for c in orfs_df.columns if c.endswith("_function_sig"))
-    bits_cols = sorted(c for c in orfs_df.columns if c.endswith("_bits"))
-    evalue_cols = sorted(c for c in orfs_df.columns if c.endswith("_evalue"))
+    func_cols = sorted((c for c in orfs_df.columns if c.endswith("_function")), key=label_sort_key)
+    sig_cols = sorted((c for c in orfs_df.columns if c.endswith("_function_sig")), key=label_sort_key)
+    bits_cols = sorted((c for c in orfs_df.columns if c.endswith("_bits")), key=label_sort_key)
+    evalue_cols = sorted((c for c in orfs_df.columns if c.endswith("_evalue")), key=label_sort_key)
 
     fixed_prefix = ["proteinID", "PC", "protein_len"]
     fixed_suffix = ["protein", "orf", "start", "stop", "strand", "contigID", "orf_len", "codon_stop", "source"]

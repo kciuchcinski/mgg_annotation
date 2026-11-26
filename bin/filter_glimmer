@@ -30,7 +30,8 @@ def main():
         pd.DataFrame(columns=cols).to_csv(removed, sep=",", index=False)
         return 0
 
-    df = pd.read_csv(glimmer)
+    # contigID as string: numeric IDs ("1", "001") must not become integers
+    df = pd.read_csv(glimmer, dtype={"contigID": str})
 
     # Reformatting columns (original: downcast='integer')
     df["start"] = pd.to_numeric(df["start"], downcast="integer")

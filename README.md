@@ -32,7 +32,7 @@ See [Installation](#installation), [Database setup](#database-setup), and [Confi
 
 The pipeline takes phage genome assemblies (FASTA) as input and produces per-ORF functional annotations by:
 
-1. **Preprocessing** — validates input genomes and filters by minimum length. Files are skipped (and listed in `dropped_inputs.tsv`) if they hold more than one sequence or are shorter than `PHAGE_MIN_LENGTH`.
+1. **Preprocessing** — validates input genomes and filters by minimum length. Files are skipped (and listed in `dropped_inputs.tsv`) if they hold more than one sequence or are shorter than `PHAGE_MIN_LENGTH`. Contig IDs (the first word of the FASTA header) must be unique across all input files; if two files share one, the run stops and lists the clashing files.
 2. **ORF calling** — predicts open reading frames using both Prodigal-gv (meta mode) and Glimmer3, then reconciles predictions.
 3. **Protein clustering** — clusters translated ORFs with MMseqs2 to reduce redundancy and generate multiple sequence alignments (MSAs).
 4. **MSA enrichment** — enriches MSAs against the PHROGs database using HHblits to improve search sensitivity.
@@ -379,6 +379,7 @@ Results are written to the directory specified by `OUTPUT_DIR`.
 | `annotation.tsv` | Per-ORF annotation table with top hits from each database |
 | `report.tsv` | Filtered hits passing the probability and coverage thresholds |
 | `dropped_inputs.tsv` | Input files that were skipped, with the reason (multi-record FASTA, too short, empty) |
+| `failed_hhr.tsv` | HH-suite result files that could not be parsed (database, PC, error); their hits are missing. Header only when all files parsed |
 | `search.tsv` | Full unfiltered hits table (if `WRITE_SEARCH_TABLE` is enabled) |
 | `PCs2proteins.tsv` | Mapping of protein clusters (PCs) to individual protein IDs |
 | `genbanks/<GENOME_ID>.gb` | GenBank-formatted files with annotated features for each input genome |
