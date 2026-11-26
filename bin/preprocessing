@@ -32,6 +32,8 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     kept_records, kept_rows, dropped_rows = [], [], []
+    seen_ids = {}  # contig ID -> input file that introduced it
+    duplicates = []  # (contig ID, first file, clashing file)
 
     for phage in inputs:
         phage_path = Path(phage)
@@ -60,6 +62,13 @@ def main():
             dropped_rows.append({"file_name": fname, "reason": f"contig length {contig_len} < min_len {args.min_len}"})
             continue
 
+        # Contig IDs key every downstream table (ORFs, proteins, GenBank), so they must be unique.
+        # Collect every clash first so the error lists them all at once.
+        if contig_id in seen_ids:
+            duplicates.append((contig_id, seen_ids[contig_id], phage_path.name))
+            continue
+        seen_ids[contig_id] = phage_path.name
+
         kept_records.append(r)
         kept_rows.append({
             "file_name": fname,
@@ -70,6 +79,14 @@ def main():
             "n_contigs": ncontigs,
             "seq": str(r.seq),
         })
+
+    if duplicates:
+        print(f"Error in preprocessing: {len(duplicates)} input file(s) reuse a contig ID that another input "
+              f"file already has. Contig IDs (the first word of the FASTA header) must be unique across "
+              f"all inputs; rename the headers and rerun:", file=sys.stderr)
+        for contig_id, first, other in duplicates:
+            print(f"  '{contig_id}': {first} and {other}", file=sys.stderr)
+        return 1
 
     dropped_df = pd.DataFrame(dropped_rows, columns=["file_name", "reason"])
     dropped_df.to_csv(args.dropped, sep="\t", index=False)

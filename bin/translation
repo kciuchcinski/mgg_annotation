@@ -148,7 +148,8 @@ def main():
     seq_by_id = {rec.id: rec.seq for rec in records}
 
     # Load ORFs and validate required columns
-    complete_df = pd.read_csv(args.orfs)
+    # contigID as string so it matches the FASTA record IDs (also for numeric IDs like "1")
+    complete_df = pd.read_csv(args.orfs, dtype={"contigID": str})
     required = {"start", "stop", "strand", "contigID"}
     missing = required - set(complete_df.columns)
     if missing:

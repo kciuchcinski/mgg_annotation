@@ -89,9 +89,9 @@ def process_batch(file_paths, dbname):
                     hit.pvalue,
                     hit.name,
                 ])
-        except Exception:
-            # Don't let one bad file kill the worker; report it in main()
-            failed.append(fpath)
+        except Exception as e:
+            # Don't let one bad file kill the worker; it is reported in failed_hhr.tsv
+            failed.append((dbname, Path(fpath).stem, fpath, f"{type(e).__name__}: {e}"))
             continue
 
     if not rows:
@@ -126,6 +126,7 @@ def main():
     parser.add_argument("--phrogs-table", required=True, help="PHROGS metadata table (TSV)")
     parser.add_argument("--write-search", required=True, help="Boolean flag: write search.tsv or not")
     parser.add_argument("--out-search", required=True, help="Output path for search.tsv")
+    parser.add_argument("--out-failed", default="failed_hhr.tsv", help="Output TSV listing HHR files that could not be parsed")
     parser.add_argument("--workers", type=int, default=os.cpu_count(), help="Number of worker processes")
 
     args = parser.parse_args()
@@ -170,22 +171,30 @@ def main():
         total_futures = len(futures)
         
         for future in as_completed(futures):
+            # A failed worker means a whole batch of HHR files is missing: stop instead of
+            # writing an incomplete search.tsv
             try:
                 dbname, df_chunk, failed = future.result()
-                failed_files.extend(failed)
-                if df_chunk is not None and not df_chunk.empty:
-                    results_map[dbname].append(df_chunk)
             except Exception as e:
-                print(f"Worker task failed: {e}", file=sys.stderr)
-            
+                print(f"ERROR: a worker batch failed ({type(e).__name__}: {e}); aborting.", file=sys.stderr)
+                raise SystemExit(1)
+            failed_files.extend(failed)
+            if df_chunk is not None and not df_chunk.empty:
+                results_map[dbname].append(df_chunk)
+
             completed_count += 1
             if completed_count % 500 == 0:
                 print(f"Progress: {completed_count}/{total_futures} batches processed...", flush=True)
 
+    # Always write the list (header only when nothing failed) so the workflow can warn about it
+    failed_df = pd.DataFrame(sorted(failed_files), columns=["db", "PC", "file", "error"])
+    Path(args.out_failed).parent.mkdir(parents=True, exist_ok=True)
+    failed_df.drop(columns="file").to_csv(args.out_failed, sep="\t", index=False)
     if failed_files:
-        print(f"WARNING: {len(failed_files)} HHR file(s) could not be parsed and were skipped, e.g.:", file=sys.stderr)
-        for f in sorted(failed_files)[:10]:
-            print(f"  {f}", file=sys.stderr)
+        print(f"WARNING: {len(failed_files)} HHR file(s) could not be parsed; their hits are missing "
+              f"(listed in {args.out_failed}), e.g.:", file=sys.stderr)
+        for db, pc, f, err in sorted(failed_files)[:10]:
+            print(f"  {db} {pc}: {err}", file=sys.stderr)
 
     print("Aggregating results...", flush=True)
     

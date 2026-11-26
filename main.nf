@@ -374,7 +374,7 @@ process ENRICH_MSA_PHROGS {
     ln -s \$(realpath ${qidx}) enr/qdb.ffindex
     ln -s \$(realpath ${qdat}) enr/qdb.ffdata
     cd enr
-    ${params.SEARCH_TOOL} -i qdb -d "\$db" -oa3m enr_a3m -n 2 -cov 0 -p 0.95 -cpu ${task.cpus} > enrich.log 2>&1
+    ${params.SEARCH_TOOL} -i qdb -d "\$db" -oa3m enr_a3m -n 2 -cov 0 -p 95 -cpu ${task.cpus} > enrich.log 2>&1
     """
 }
 
@@ -455,6 +455,7 @@ process GATHER_HHR {
 process COLLECT_HITS {
     cpus params.PARSING_CPUS
     publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'search.tsv', enabled: params.WRITE_SEARCH_TABLE
+    publishDir "${params.OUTPUT_DIR}", mode: 'copy', pattern: 'failed_hhr.tsv'
 
     input:
     path pcs2proteins_tsv
@@ -464,7 +465,8 @@ process COLLECT_HITS {
     path phrogs_tbl
 
     output:
-    path "search.tsv"
+    path "search.tsv",     emit: search
+    path "failed_hhr.tsv", emit: failed
 
     script:
     """
@@ -476,7 +478,8 @@ process COLLECT_HITS {
       --phrogs-table ${phrogs_tbl} \\
       --write-search ${params.WRITE_SEARCH_TABLE} \\
       --workers ${task.cpus} \\
-      --out-search search.tsv
+      --out-search search.tsv \\
+      --out-failed failed_hhr.tsv
     """
 }
 
@@ -639,9 +642,17 @@ workflow {
         phrogs_tbl,
     )
 
+    ch_hits_raw.failed
+        .map { f -> f.readLines().drop(1) }
+        .subscribe { lines ->
+            if( lines )
+                log.warn "${lines.size()} HHR file(s) could not be parsed; their hits are missing from the annotation " +
+                    "(listed in ${params.OUTPUT_DIR}/failed_hhr.tsv)"
+        }
+
     // 6.2 Filter hits -> report.tsv
     ch_hits_filtered = FILTER_HITS(
-        ch_hits_raw,
+        ch_hits_raw.search,
         params.ANNOTATION_FILTERS.PHROGS.MIN_PROB,
         params.ANNOTATION_FILTERS.PHROGS.MIN_QCOV,
         params.ANNOTATION_FILTERS.PHROGS.MIN_TCOV,

@@ -79,9 +79,11 @@ def main():
     args = parse_args()
 
     # Load inputs
-    meta = pd.read_csv(args.metadata, sep="\t")
-    prodigal_df = pd.read_csv(args.prodigal)
-    glimmer_df = pd.read_csv(args.glimmer)
+    # contigID as string: numeric IDs ("1", "001") must not become integers
+    ids = {"contigID": str}
+    meta = pd.read_csv(args.metadata, sep="\t", dtype=ids)
+    prodigal_df = pd.read_csv(args.prodigal, dtype=ids)
+    glimmer_df = pd.read_csv(args.glimmer, dtype=ids)
 
     # Required columns
     for name, df, req in (
@@ -103,12 +105,14 @@ def main():
     # Merge prodigal with filtered glimmer (original)
     df = pd.concat([prodigal_df, filtered_glimmer_df], ignore_index=True)
 
-    # Rebuild final_orfs keyed by contig then by stop (original grouping behavior)
+    # Rebuild final_orfs keyed by contig, then by (stop, strand): ORFs that share a stop codon
+    # are one gene (first row wins, i.e. Prodigal over Glimmer). Strand is part of the key so
+    # that a '+' and a '-' gene whose stop coordinates happen to coincide are both kept.
     final_orfs = {}
     for cid, contig in df.groupby('contigID'):
-        for oid, orf in contig.groupby('stop'):
-            row = [orf['start'].iloc[0], oid, orf['strand'].iloc[0], cid, orf['source'].iloc[0]]
-            final_orfs[f"{cid}-{oid}"] = row
+        for (oid, strand), orf in contig.groupby(['stop', 'strand']):
+            row = [orf['start'].iloc[0], oid, strand, cid, orf['source'].iloc[0]]
+            final_orfs[f"{cid}-{oid}-{strand}"] = row
 
     confident_orfs = pd.DataFrame.from_dict(
         final_orfs, orient='index', columns=['start', 'stop', 'strand', 'contigID', 'source']
